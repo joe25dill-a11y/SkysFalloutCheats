@@ -189,4 +189,18 @@ bool CanDrawOverlay()
 	return ObserveWorldReady();
 }
 
+namespace {
+bool g_overlayGateCached = false;
+}
+
+void RefreshOverlayGateCache()
+{
+	g_overlayGateCached = CanDrawOverlay();
+}
+
+bool OverlayGateCached()
+{
+	return g_overlayGateCached;
+}
+
 } // namespace sfc

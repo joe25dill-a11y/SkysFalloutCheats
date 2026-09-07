@@ -91,7 +91,8 @@ void CloseAllUi()
 
 void DrawOverlaySafe(IDirect3DDevice9* device)
 {
-	if (g_inReset || IsLoadingScreen() || !CanDrawOverlay())
+	// Draw only — gate already decided in hkEndScene from cached MainGameLoop state.
+	if (g_inReset || IsLoadingScreen() || IsGameMenuBlocking())
 		return;
 
 	if (!EnsureStateBlock(device))
@@ -143,29 +144,23 @@ HRESULT STDMETHODCALLTYPE hkEndScene(IDirect3DDevice9* device)
 		if (IsolationStaticImGuiOnly())
 			CloseAllUi();
 
+		// Fallback only if NVSE MainGameLoop missing (keeps cheats alive).
 		if (!work.GameLoopAvailable())
 			App::Get().TickGameWorld();
 
-		bool canDraw = false;
-		if (IsolationStaticImGuiOnly()) {
-			// Avoid CanDrawOverlay player/cell memory walks during Test A.
+		// Prefer cached gate from MainGameLoop — avoid player/cell walks every EndScene.
+		bool canDraw = !g_hardDisableDraw && !loading && !gameUi && OverlayGateCached();
+		if (IsolationStaticImGuiOnly())
 			canDraw = !g_hardDisableDraw && !loading && !gameUi && ObserveWorldReady();
-		} else {
-			canDraw = !g_hardDisableDraw && CanDrawOverlay();
-		}
 
 		const bool menuOpen = Input::Get().WantCapture();
-		if (canDraw) {
-			if (!menuOpen)
-				App::Get().TickHudReads();
-			if (IsolationAllowHotkeys())
-				Hotkeys::Get().Tick();
-		}
+		if (canDraw && IsolationAllowHotkeys())
+			Hotkeys::Get().Tick(); // console cmds enqueue only
 
 		const bool liveHud = Config::Get().Data().hud.liveHud && Config::Get().Data().hud.enabled;
 		const bool wantUi = IsolationStaticImGuiOnly() ? liveHud : (menuOpen || liveHud);
 
-		if (canDraw && wantUi && !gameUi && !loading && IsPrimaryBackBuffer(device)) {
+		if (canDraw && wantUi && IsPrimaryBackBuffer(device)) {
 			g_rendering = true;
 			g_device = device;
 			__try {

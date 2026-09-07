@@ -689,9 +689,9 @@ void GameState::Tick(float dt)
 	refreshAccum_ = 0.f;
 
 	// Weapon/process vtable probes are the highest-risk live reads while running/combat.
-	// Warm up with light reads first, then refresh weapon at most every 2s.
-	constexpr int kWeaponWarmupReads = 8; // ~4s of successful light HUD
-	const bool wantWeapon = (lightOkStreak_ >= kWeaponWarmupReads) && (weaponAccum_ >= 2.0f);
+	// Warm up with light reads first, then refresh weapon at most every 3s.
+	constexpr int kWeaponWarmupReads = 10; // ~5s of successful light HUD
+	const bool wantWeapon = (lightOkStreak_ >= kWeaponWarmupReads) && (weaponAccum_ >= 3.0f);
 	if (wantWeapon)
 		weaponAccum_ = 0.f;
 

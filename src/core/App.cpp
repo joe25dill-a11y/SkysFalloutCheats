@@ -46,7 +46,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s diagnostic-isolation Test-B (no_gamestate)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v7 (GameState on MainGameLoop, EndScene draw-only)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);
@@ -62,22 +62,17 @@ bool App::Init(const char* runtimeDir)
 		cfg.Data().performance.espEnabled = false;
 		SFC_WARN("[CONFIG] ESP forced OFF for stability");
 	}
-	// Isolation mode comes from config (do not force static_imgui every boot).
+	// Leave diagnostic isolation — full product with safer EndScene split.
 	cfg.Data().diagnostics.enabled = true;
-	if (cfg.Data().diagnostics.isolationMode.empty())
-		cfg.Data().diagnostics.isolationMode = "off";
-	// Advance Test A → Test B after confirmed Fallout HUD OK with static ImGui.
-	if (cfg.Data().diagnostics.isolationMode == "static_imgui") {
-		cfg.Data().diagnostics.isolationMode = "no_gamestate";
-		cfg.MarkDirty();
-		SFC_LOG("[ISOLATION] advanced static_imgui → no_gamestate (Test B)");
-	}
+	cfg.Data().diagnostics.isolationMode = "off";
 	cfg.Data().hud.liveHud = true;
 	cfg.Data().hud.enabled = true;
 	cfg.Data().hud.statusBar = true;
 	cfg.Data().hud.combatInfo = true;
 	cfg.Data().hud.worldInfo = true;
+	cfg.MarkDirty();
 	IsolationLogBoot();
+	SFC_LOG("[CONFIG] isolation=off — live HUD numbers + menu + cheats enabled");
 	BootMark("CONFIG", "loaded");
 	ResetWorldSettle("boot");
 
@@ -152,16 +147,23 @@ void App::TickGameWorld()
 {
 	if (!ready_) return;
 	if (IsLoadingScreen()) return;
-	if (!ObserveWorldReady()) return;
 	if (IsolationStaticImGuiOnly()) return;
 
 	auto& q = GameWorkQueue::Get();
 	q.EnterGameLoop();
 
-	DiagThrottle("game.loop", 5000, "TickGameWorld pendingConsole=%zu", q.PendingConsole());
+	// Gate + GameState live here — NOT in EndScene.
+	RefreshOverlayGateCache();
+
+	DiagThrottle("game.loop", 5000, "TickGameWorld pendingConsole=%zu gate=%d",
+		q.PendingConsole(), OverlayGateCached() ? 1 : 0);
 
 	if (IsolationAllowConsole())
 		q.DrainConsole();
+
+	if (ObserveWorldReady() && !IsGameMenuBlocking())
+		TickHudReads();
+
 	if (IsolationAllowCompanionAndTeleportTicks()) {
 		CompanionFollow::Get().Tick();
 		FeatureRegistry::Get().TickAll(1.f / 60.f);

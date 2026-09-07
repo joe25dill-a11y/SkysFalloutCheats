@@ -46,8 +46,8 @@ struct PerformanceSettings {
 struct DiagnosticsSettings {
 	// Forensic [DIAG] seq logs for crash/freeze investigation (throttled).
 	bool enabled = true;
-	// Isolation test mode — see Isolation.hpp. Default static_imgui for D3D diagnosis.
-	std::string isolationMode = "static_imgui";
+	// Isolation test mode — see Isolation.hpp. "off" = full product.
+	std::string isolationMode = "off";
 };
 
 struct ControlSettings {
