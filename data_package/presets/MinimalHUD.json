@@ -1,0 +1,6 @@
+{
+  "name": "MinimalHUD",
+  "description": "Immersive minimal overlay",
+  "theme": { "minimalMode": true, "crtEffects": false, "scanlines": false },
+  "hud": { "combatInfo": false, "worldInfo": false, "fps": false, "activePreset": false }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "GodMode",
+  "description": "Combat testing with protection cues",
+  "notes": "Apply god mode from Player panel after load",
+  "hud": { "enabled": true, "combatInfo": true, "fps": true }
+}

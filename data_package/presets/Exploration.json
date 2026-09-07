@@ -1,0 +1,6 @@
+{
+  "name": "Exploration",
+  "description": "HUD-forward exploration preset",
+  "hud": { "enabled": true, "statusBar": true, "combatInfo": false, "worldInfo": true, "fps": false },
+  "theme": { "minimalMode": false, "crtEffects": true }
+}

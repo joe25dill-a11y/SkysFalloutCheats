@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "lastPreset": "",
+  "autoLoadPreset": false,
+  "theme": {
+    "uiScale": 1.0,
+    "opacity": 0.92,
+    "accent": [1.0, 0.72, 0.2],
+    "fontSize": 16,
+    "animSpeed": 1.0,
+    "crtEffects": false,
+    "scanlines": false,
+    "glow": false,
+    "soundEffects": true,
+    "compactMode": false,
+    "minimalMode": false
+  },
+  "hud": {
+    "enabled": true,
+    "liveHud": true,
+    "statusBar": true,
+    "combatInfo": true,
+    "worldInfo": true,
+    "fps": false,
+    "activeEffects": true,
+    "activePreset": false,
+    "notifications": true,
+    "objectives": true,
+    "scale": 1.0,
+    "posX": 0,
+    "posY": 0
+  },
+  "performance": {
+    "espScanMs": 250,
+    "maxEspMarkers": 128,
+    "espMaxDistance": 8000,
+    "eventDrivenPreferred": true
+  },
+  "diagnostics": {
+    "enabled": true,
+    "isolationMode": "static_imgui"
+  },
+  "controls": {
+    "menuToggleVk": 45,
+    "searchToggleVk": 112,
+    "godModeVk": 116,
+    "healVk": 117,
+    "addCapsVk": 118,
+    "blockGameInputWhenMenuOpen": true
+  }
+}

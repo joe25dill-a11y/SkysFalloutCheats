@@ -1,0 +1,14 @@
+build/
+deps/
+*.user
+*.suo
+.vs/
+cmake-build-*/
+*.pdb
+*.obj
+7zr.exe
+dist/
+build_*.txt
+crash_*.txt
+*.log
+.DS_Store
