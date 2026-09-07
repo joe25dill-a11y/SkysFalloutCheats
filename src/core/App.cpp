@@ -46,7 +46,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s playable-v7 (GameState on MainGameLoop, EndScene draw-only)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v8 (light GameState HP/AP only while playing)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);
@@ -62,7 +62,6 @@ bool App::Init(const char* runtimeDir)
 		cfg.Data().performance.espEnabled = false;
 		SFC_WARN("[CONFIG] ESP forced OFF for stability");
 	}
-	// Leave diagnostic isolation — full product with safer EndScene split.
 	cfg.Data().diagnostics.enabled = true;
 	cfg.Data().diagnostics.isolationMode = "off";
 	cfg.Data().hud.liveHud = true;
@@ -70,9 +69,9 @@ bool App::Init(const char* runtimeDir)
 	cfg.Data().hud.statusBar = true;
 	cfg.Data().hud.combatInfo = true;
 	cfg.Data().hud.worldInfo = true;
-	cfg.MarkDirty();
+	// Do NOT MarkDirty here — that forced a disk save mid-load and correlated with freezes.
 	IsolationLogBoot();
-	SFC_LOG("[CONFIG] isolation=off — live HUD numbers + menu + cheats enabled");
+	SFC_LOG("[CONFIG] isolation=off — light live HP/AP; caps/weapon when INSERT open");
 	BootMark("CONFIG", "loaded");
 	ResetWorldSettle("boot");
 
@@ -153,7 +152,11 @@ void App::TickGameWorld()
 	q.EnterGameLoop();
 
 	// Gate + GameState live here — NOT in EndScene.
-	RefreshOverlayGateCache();
+	static int gateDiv = 0;
+	if ((++gateDiv % 8) == 0) // ~every 8 game loops, not every frame
+		RefreshOverlayGateCache();
+	else if (!OverlayGateCached() && ObserveWorldReady())
+		RefreshOverlayGateCache(); // retry sooner while waiting to arm
 
 	DiagThrottle("game.loop", 5000, "TickGameWorld pendingConsole=%zu gate=%d",
 		q.PendingConsole(), OverlayGateCached() ? 1 : 0);

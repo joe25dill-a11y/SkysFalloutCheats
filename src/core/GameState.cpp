@@ -1,6 +1,7 @@
 #include "core/GameState.hpp"
 #include "core/Log.hpp"
 #include "core/Diag.hpp"
+#include "core/Input.hpp"
 #include "render/D3D9Hook.hpp"
 #include <windows.h>
 #include <cstring>
@@ -542,7 +543,7 @@ struct PodSnap {
 	int ammoClip = -1, ammoClipMax = -1, ammoReserve = -1;
 };
 
-PodSnap RefreshPod(bool includeWeapon)
+PodSnap RefreshPod(bool includeHeavy)
 {
 	PodSnap s{};
 	s.stage = 1;
@@ -577,8 +578,16 @@ PodSnap RefreshPod(bool includeWeapon)
 			return s;
 		}
 		s.hasPos = 1;
-
 		s.stage = 7;
+
+		// Light path ends here — caps/cell/weapon were correlating with freezes after load.
+		if (!includeHeavy) {
+			s.capsStatus = 0;
+			s.weaponStatus = 0;
+			s.stage = 11;
+			return s;
+		}
+
 		__try { s.gameHour = ReadGlobalFloat(kFormGameHour, "GameHour"); }
 		__except (EXCEPTION_EXECUTE_HANDLER) { s.gameHour = -1.f; }
 
@@ -596,16 +605,12 @@ PodSnap RefreshPod(bool includeWeapon)
 		ReadCellName(player, s.location, sizeof(s.location));
 
 		s.stage = 10;
-		if (includeWeapon) {
-			__try {
-				ReadWeapon(player, s.weapon, sizeof(s.weapon), s.ammoClip, s.ammoClipMax, s.ammoReserve);
-				s.weaponStatus = 2;
-			}
-			__except (EXCEPTION_EXECUTE_HANDLER) {
-				s.weaponStatus = 1;
-			}
-		} else {
-			s.weaponStatus = 0; // skipped — keep previous HUD weapon string
+		__try {
+			ReadWeapon(player, s.weapon, sizeof(s.weapon), s.ammoClip, s.ammoClipMax, s.ammoReserve);
+			s.weaponStatus = 2;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			s.weaponStatus = 1;
 		}
 		s.stage = 11;
 	}
@@ -634,11 +639,11 @@ bool ScanNearbySafe(void* player, float maxDist, int maxMarkers, bool npcs, bool
 	}
 }
 
-PodSnap RefreshPodSealed(bool includeWeapon)
+PodSnap RefreshPodSealed(bool includeHeavy)
 {
 	PodSnap pod{};
 	__try {
-		pod = RefreshPod(includeWeapon);
+		pod = RefreshPod(includeHeavy);
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) {
 		pod = PodSnap{};
@@ -685,18 +690,17 @@ void GameState::Tick(float dt)
 
 	refreshAccum_ += dt;
 	weaponAccum_ += dt;
-	if (refreshAccum_ < 0.50f) return;
+	// Light HP/AP only at 1 Hz — full caps/weapon/cell only when INSERT is open.
+	if (refreshAccum_ < 1.0f) return;
 	refreshAccum_ = 0.f;
 
-	// Weapon/process vtable probes are the highest-risk live reads while running/combat.
-	// Warm up with light reads first, then refresh weapon at most every 3s.
-	constexpr int kWeaponWarmupReads = 10; // ~5s of successful light HUD
-	const bool wantWeapon = (lightOkStreak_ >= kWeaponWarmupReads) && (weaponAccum_ >= 3.0f);
-	if (wantWeapon)
+	const bool menuOpen = Input::Get().MenuOpen();
+	const bool wantHeavy = menuOpen && (weaponAccum_ >= 2.0f);
+	if (wantHeavy)
 		weaponAccum_ = 0.f;
 
 	const unsigned t0 = GetTickCount();
-	PodSnap pod = RefreshPodSealed(wantWeapon);
+	PodSnap pod = RefreshPodSealed(wantHeavy);
 	const unsigned readMs = GetTickCount() - t0;
 
 	if (pod.stage < 0 || (pod.stage > 0 && pod.stage < 11 && !pod.valid && pod.healthStatus == 1)) {
@@ -719,18 +723,17 @@ void GameState::Tick(float dt)
 
 	static int cool = 0;
 	if (cool-- <= 0) {
-		cool = 60; // ~30s at 0.5s refresh — was spamming every second
-		SFC_LOG("GameState stage=%d status=%s hp=%s:%.0f/%.0f caps=%s:%d wpn=%s:%s loc=%s warm=%d",
+		cool = 30;
+		SFC_LOG("GameState stage=%d status=%s hp=%s:%.0f/%.0f caps=%s:%d wpn=%s:%s heavy=%d",
 			pod.stage,
 			pod.valid ? "VALID" : (pod.stage <= 3 ? "UNAVAILABLE" : "INVALID"),
 			pod.healthStatus == 2 ? "VALID" : (pod.healthStatus == 1 ? "INVALID" : "UNAVAILABLE"),
 			pod.health, pod.healthMax,
 			pod.capsStatus == 2 ? "VALID" : (pod.capsStatus == 1 ? "INVALID" : "UNAVAILABLE"),
 			pod.caps,
-			pod.weaponStatus == 2 ? "VALID" : (pod.weaponStatus == 1 ? "INVALID" : (wantWeapon ? "SKIP" : "WARM")),
+			pod.weaponStatus == 2 ? "VALID" : (pod.weaponStatus == 1 ? "INVALID" : "LIGHT"),
 			pod.weapon[0] ? pod.weapon : (snap_.weaponName.empty() ? "-" : snap_.weaponName.c_str()),
-			pod.location[0] ? pod.location : "-",
-			lightOkStreak_);
+			wantHeavy ? 1 : 0);
 	}
 
 	if (!pod.valid) {
@@ -746,15 +749,15 @@ void GameState::Tick(float dt)
 	s.status = ReadStatus::Valid;
 	s.stage = pod.stage;
 	s.healthStatus = static_cast<ReadStatus>(pod.healthStatus);
-	s.capsStatus = static_cast<ReadStatus>(pod.capsStatus);
 	s.health = pod.health;
 	s.healthMax = pod.healthMax;
 	s.ap = pod.ap;
 	s.apMax = pod.apMax;
 	s.level = pod.level;
-	s.caps = pod.caps;
-	if (pod.location[0]) s.location = pod.location;
-	if (wantWeapon) {
+	if (wantHeavy) {
+		s.capsStatus = static_cast<ReadStatus>(pod.capsStatus);
+		s.caps = pod.caps;
+		if (pod.location[0]) s.location = pod.location;
 		s.weaponStatus = static_cast<ReadStatus>(pod.weaponStatus);
 		if (pod.weaponStatus == 2) {
 			if (pod.weapon[0]) s.weaponName = pod.weapon;
@@ -763,16 +766,16 @@ void GameState::Tick(float dt)
 			s.ammoClipMax = pod.ammoClipMax;
 			s.ammoReserve = pod.ammoReserve;
 		}
+		s.gameHour = pod.gameHour;
 	}
-	s.gameHour = pod.gameHour;
 	s.hasPos = pod.hasPos != 0;
 	s.posX = pod.posX;
 	s.posY = pod.posY;
 	s.posZ = pod.posZ;
 	s.nearby = std::move(snap_.nearby);
 	snap_ = std::move(s);
-	DiagThrottle("GameState.read.ok", 5000, "stage=%d ms=%u wpn=%d warm=%d",
-		pod.stage, readMs, wantWeapon ? 1 : 0, lightOkStreak_);
+	DiagThrottle("GameState.read.ok", 5000, "stage=%d ms=%u heavy=%d",
+		pod.stage, readMs, wantHeavy ? 1 : 0);
 }
 
 void GameState::ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, bool doors)
