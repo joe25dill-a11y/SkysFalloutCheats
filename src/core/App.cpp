@@ -46,7 +46,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s diagnostic-isolation (ChatGPT test mode)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s diagnostic-isolation Test-B (no_gamestate)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);
@@ -62,12 +62,21 @@ bool App::Init(const char* runtimeDir)
 		cfg.Data().performance.espEnabled = false;
 		SFC_WARN("[CONFIG] ESP forced OFF for stability");
 	}
-	// Force Test A until user/ChatGPT says otherwise — D3D coexistence diagnosis.
+	// Isolation mode comes from config (do not force static_imgui every boot).
 	cfg.Data().diagnostics.enabled = true;
-	cfg.Data().diagnostics.isolationMode = "static_imgui";
+	if (cfg.Data().diagnostics.isolationMode.empty())
+		cfg.Data().diagnostics.isolationMode = "off";
+	// Advance Test A → Test B after confirmed Fallout HUD OK with static ImGui.
+	if (cfg.Data().diagnostics.isolationMode == "static_imgui") {
+		cfg.Data().diagnostics.isolationMode = "no_gamestate";
+		cfg.MarkDirty();
+		SFC_LOG("[ISOLATION] advanced static_imgui → no_gamestate (Test B)");
+	}
 	cfg.Data().hud.liveHud = true;
 	cfg.Data().hud.enabled = true;
-	cfg.MarkDirty();
+	cfg.Data().hud.statusBar = true;
+	cfg.Data().hud.combatInfo = true;
+	cfg.Data().hud.worldInfo = true;
 	IsolationLogBoot();
 	BootMark("CONFIG", "loaded");
 	ResetWorldSettle("boot");

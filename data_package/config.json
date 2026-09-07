@@ -38,7 +38,7 @@
   },
   "diagnostics": {
     "enabled": true,
-    "isolationMode": "static_imgui"
+    "isolationMode": "no_gamestate"
   },
   "controls": {
     "menuToggleVk": 45,
