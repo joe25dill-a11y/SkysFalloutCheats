@@ -121,16 +121,20 @@ public:
 
 		ImGui::SeparatorText("Limits");
 		bool dirty = false;
-		// Slider is GAME UNITS (not feet). 128 units = 6 ft → 8000 u ≈ 375 ft.
-		dirty |= ImGui::SliderFloat("Max range (game units)##esp_dist", &perf.espMaxDistance, 500.f, 20000.f, "%.0f");
-		ImGui::TextDisabled("≈ %.0f ft   (128 units = 6 ft — 8000 is NOT 8000 feet)",
-			perf.espMaxDistance * (6.f / 128.f));
-		dirty |= ImGui::SliderInt("Max markers##esp_max", &perf.maxEspMarkers, 8, 256);
+		// UI in feet; stored config is still game units.
+		float rangeFt = perf.espMaxDistance * (6.f / 128.f);
+		if (ImGui::SliderFloat("Max range (feet)##esp_dist_ft", &rangeFt, 100.f, 2000.f, "%.0f ft")) {
+			perf.espMaxDistance = rangeFt * (128.f / 6.f);
+			dirty = true;
+		}
+		ImGui::TextDisabled("%.0f game units  |  loot scans nearby loaded cells (not the whole map)",
+			perf.espMaxDistance);
+		dirty |= ImGui::SliderInt("Max markers##esp_max", &perf.maxEspMarkers, 32, 512);
 		dirty |= ImGui::SliderInt("Scan interval (ms)##esp_scan", &perf.espScanMs, 100, 2000);
 		if (dirty) Config::Get().MarkDirty();
 		ImGui::TextWrapped(
-			"Loot/doors only scan your CURRENT cell. NPCs come from loaded actor lists. "
-			"You will not see every container across the whole map even at max range.");
+			"Shows containers/loot/doors in your cell and neighboring loaded cells within range. "
+			"The game must have the cell loaded — empty desert far away will not ESP until you get closer.");
 
 		if (ImGui::Button("Scan now##esp_scan_btn")) {
 			GameState::Get().ScanNearby(

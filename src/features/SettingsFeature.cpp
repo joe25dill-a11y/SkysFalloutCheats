@@ -52,8 +52,12 @@ public:
 
 		ImGui::SeparatorText("Performance");
 		dirty |= ImGui::SliderInt("ESP Scan (ms)##set_espscan", &cfg.performance.espScanMs, 50, 2000);
-		dirty |= ImGui::SliderInt("Max ESP Markers##set_espmax", &cfg.performance.maxEspMarkers, 8, 512);
-		dirty |= ImGui::SliderFloat("ESP Max Distance##set_espdist", &cfg.performance.espMaxDistance, 500.f, 20000.f, "%.0f");
+		dirty |= ImGui::SliderInt("Max ESP Markers##set_espmax", &cfg.performance.maxEspMarkers, 32, 512);
+		float espFt = cfg.performance.espMaxDistance * (6.f / 128.f);
+		if (ImGui::SliderFloat("ESP Max Range (ft)##set_espdist", &espFt, 100.f, 2000.f, "%.0f")) {
+			cfg.performance.espMaxDistance = espFt * (128.f / 6.f);
+			dirty = true;
+		}
 		dirty |= ImGui::Checkbox("Prefer Event-Driven##set_events", &cfg.performance.eventDrivenPreferred);
 
 		ImGui::SeparatorText("Controls");

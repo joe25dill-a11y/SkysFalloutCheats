@@ -86,6 +86,9 @@ constexpr std::ptrdiff_t kOff_BaseProcess = 0x068;
 constexpr std::ptrdiff_t kOff_WeaponInfo = 0x114;
 constexpr std::ptrdiff_t kOff_AmmoInfo = 0x118;
 constexpr std::ptrdiff_t kOff_CellObjectList = 0x0AC;
+constexpr std::ptrdiff_t kOff_CellData = 0x048;       // CellCoordinates*
+constexpr std::ptrdiff_t kOff_CellWorldSpace = 0x0C0; // TESWorldSpace*
+constexpr std::ptrdiff_t kOff_WsCellMap = 0x030;      // NiTPointerMap<TESObjectCELL>*
 constexpr std::ptrdiff_t kOff_ActorBaseFullName = 0x0D0;
 constexpr std::ptrdiff_t kOff_WeapFullName = 0x030;
 constexpr std::ptrdiff_t kOff_WeapClipRounds = 0x0B0; // BGSClipRoundsForm.clipRounds
@@ -116,6 +119,12 @@ float BitsToFloat(std::uint32_t bits)
 	float f = 0.f;
 	std::memcpy(&f, &bits, sizeof(f));
 	return f;
+}
+
+bool ValidUserPtr(const void* p)
+{
+	const auto v = reinterpret_cast<std::uintptr_t>(p);
+	return v > 0x10000 && v < 0xFFF00000;
 }
 
 float CallAvEaxBits(void* fn, void* self, std::uint32_t code)
@@ -351,6 +360,63 @@ bool ReadCellNode(CellNode* n, void** refrOut, CellNode** nextOut)
 	}
 }
 
+bool ReadCellGridXY(void* cell, std::int32_t* ox, std::int32_t* oy)
+{
+	__try {
+		if (!ValidUserPtr(cell) || !ox || !oy) return false;
+		void* data = *reinterpret_cast<void**>(reinterpret_cast<char*>(cell) + kOff_CellData);
+		if (!ValidUserPtr(data)) return false;
+		*ox = *reinterpret_cast<std::int32_t*>(data);
+		*oy = *reinterpret_cast<std::int32_t*>(reinterpret_cast<char*>(data) + 4);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
+void* ReadCellWorldSpace(void* cell)
+{
+	__try {
+		if (!ValidUserPtr(cell)) return nullptr;
+		void* ws = *reinterpret_cast<void**>(reinterpret_cast<char*>(cell) + kOff_CellWorldSpace);
+		return ValidUserPtr(ws) ? ws : nullptr;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return nullptr;
+	}
+}
+
+// NiTPointerMap-style bucket walk (Gamebryo). Key matches NVSE CellScanInfo packing.
+void* LookupWorldCell(void* worldSpace, std::int32_t cx, std::int32_t cy)
+{
+	__try {
+		if (!ValidUserPtr(worldSpace)) return nullptr;
+		void* map = *reinterpret_cast<void**>(reinterpret_cast<char*>(worldSpace) + kOff_WsCellMap);
+		if (!ValidUserPtr(map)) return nullptr;
+
+		const std::uint32_t numBuckets = *reinterpret_cast<std::uint32_t*>(reinterpret_cast<char*>(map) + 0x04);
+		void** buckets = *reinterpret_cast<void***>(reinterpret_cast<char*>(map) + 0x08);
+		if (!buckets || numBuckets == 0 || numBuckets > 0x10000) return nullptr;
+
+		const std::uint32_t key = (static_cast<std::uint32_t>(cx) << 16)
+			+ static_cast<std::uint32_t>((cy << 16) >> 16);
+		const std::uint32_t bucket = key % numBuckets;
+		struct Entry { Entry* next; std::uint32_t key; void* data; };
+		Entry* e = reinterpret_cast<Entry*>(buckets[bucket]);
+		for (int guard = 0; e && guard < 4096; ++guard) {
+			Entry* cur = e;
+			e = e->next;
+			if (cur->key == key && ValidUserPtr(cur->data))
+				return cur->data;
+		}
+		return nullptr;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return nullptr;
+	}
+}
+
 struct CellMarkPod {
 	std::uint8_t kind;
 	float x, y, z, dist;
@@ -395,14 +461,10 @@ bool TryCellMarkPod(void* refr, void* player, float px, float py, float pz, floa
 	}
 }
 
-void ScanCellObjects(void* player, float maxDist, bool npcs, bool loot, bool doors,
-	std::vector<NearbyMarker>& tmp)
+void ScanOneCellObjects(void* cell, void* player, float px, float py, float pz, float maxDist,
+	bool npcs, bool loot, bool doors, std::vector<NearbyMarker>& tmp)
 {
-	void* cell = ReadPlayerCell(player);
-	if (!cell || (!loot && !doors && !npcs)) return;
-	float px = 0, py = 0, pz = 0;
-	if (!ReadPlayerPos(player, &px, &py, &pz)) return;
-
+	if (!cell) return;
 	CellNode* n = ReadCellListHead(cell);
 	for (int guard = 0; n && guard < 8192; ++guard) {
 		void* refr = nullptr;
@@ -419,6 +481,37 @@ void ScanCellObjects(void* player, float maxDist, bool npcs, bool loot, bool doo
 		if (pod.name) m.name = pod.name;
 		else m.name = pod.kind == 0 ? "NPC" : (pod.kind == 2 ? "Door" : (pod.kind == 3 ? "Container" : "Loot"));
 		tmp.push_back(std::move(m));
+	}
+}
+
+void ScanCellObjects(void* player, float maxDist, bool npcs, bool loot, bool doors,
+	std::vector<NearbyMarker>& tmp)
+{
+	void* cell = ReadPlayerCell(player);
+	if (!cell || (!loot && !doors && !npcs)) return;
+	float px = 0, py = 0, pz = 0;
+	if (!ReadPlayerPos(player, &px, &py, &pz)) return;
+
+	// Always scan current cell (interiors + exterior).
+	ScanOneCellObjects(cell, player, px, py, pz, maxDist, npcs, loot, doors, tmp);
+
+	// Exterior: also walk neighboring LOADED cells so loot isn't limited to one 4096u tile.
+	// Cell size ≈ 4096 units. Depth 2 ≈ 5×5 grid (what uGrids typically keeps hot).
+	void* world = ReadCellWorldSpace(cell);
+	std::int32_t originX = 0, originY = 0;
+	if (!world || !ReadCellGridXY(cell, &originX, &originY)) return;
+
+	int depth = static_cast<int>(std::ceil(maxDist / 4096.f));
+	if (depth < 1) depth = 1;
+	if (depth > 3) depth = 3; // enough for loaded grids; unloaded Lookup returns null
+
+	for (int dy = -depth; dy <= depth; ++dy) {
+		for (int dx = -depth; dx <= depth; ++dx) {
+			if (dx == 0 && dy == 0) continue; // already scanned
+			void* other = LookupWorldCell(world, originX + dx, originY + dy);
+			if (!other || other == cell) continue;
+			ScanOneCellObjects(other, player, px, py, pz, maxDist, npcs, loot, doors, tmp);
+		}
 	}
 }
 
