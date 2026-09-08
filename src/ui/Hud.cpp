@@ -3,6 +3,7 @@
 #include "core/Config.hpp"
 #include "core/Input.hpp"
 #include "core/GameState.hpp"
+#include "core/Compat.hpp"
 #include "imgui.h"
 #include <cstdio>
 #include <cmath>
@@ -23,66 +24,47 @@ void Hud::Draw()
 		ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
 		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
 
-	// Full SFC live HUD back — top-left (Fallout HP/AP sit bottom; we stay out of that band).
 	if (hud.statusBar) {
 		ImGui::SetNextWindowPos(ImVec2(12.0f + hud.posX, 10.0f + hud.posY), ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.55f);
+		ImGui::SetNextWindowBgAlpha(0.58f);
 		if (ImGui::Begin("##SFC_Status", nullptr, flags)) {
 			ImGui::TextColored(accent, "SFC");
 			ImGui::SameLine();
 			if (snap.valid && snap.healthStatus == ReadStatus::Valid) {
-				const char* loc = snap.location.empty() ? "--" : snap.location.c_str();
-				if (snap.capsStatus == ReadStatus::Valid && snap.caps >= 0) {
-					ImGui::Text("LVL %d  |  HP %.0f/%.0f  |  AP %.0f/%.0f  |  CAPS %d  |  %s",
-						snap.level, snap.health, snap.healthMax, snap.ap, snap.apMax, snap.caps, loc);
-				} else {
-					ImGui::Text("LVL %d  |  HP %.0f/%.0f  |  AP %.0f/%.0f  |  CAPS --  |  %s",
-						snap.level, snap.health, snap.healthMax, snap.ap, snap.apMax, loc);
-				}
+				ImGui::Text("HP %.0f%%  |  AP %.0f%%", snap.health, snap.ap);
 			} else {
-				ImGui::Text("LVL --  |  HP --/--  |  AP --/--  |  CAPS --  |  --");
+				ImGui::Text("INSERT = menu  |  waiting for HUD");
 			}
 		}
 		ImGui::End();
 	}
 
 	if (hud.worldInfo) {
-		ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 200.0f, 10.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 220.0f, 10.0f), ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.55f);
 		if (ImGui::Begin("##SFC_World", nullptr, flags)) {
 			ImGui::TextColored(accent, "WORLD");
 			ImGui::SameLine();
-			if (snap.valid && snap.gameHour >= 0.f) {
-				const int hour = static_cast<int>(snap.gameHour) % 24;
-				const int mins = static_cast<int>((snap.gameHour - static_cast<int>(snap.gameHour)) * 60.f) % 60;
-				ImGui::Text("TIME %02d:%02d", hour, mins);
-			} else {
-				ImGui::Text("TIME --:--");
-			}
-			if (snap.hasPos && std::isfinite(snap.posX) && std::isfinite(snap.posY) && std::isfinite(snap.posZ)) {
-				ImGui::Text("XYZ %.0f %.0f %.0f", snap.posX, snap.posY, snap.posZ);
-			}
+			if (!snap.location.empty())
+				ImGui::Text("%s", snap.location.c_str());
+			else
+				ImGui::TextDisabled("(explore for label)");
 		}
 		ImGui::End();
 	}
 
 	if (hud.combatInfo) {
-		// Bottom-center — avoid Fallout's bottom-left HP and bottom-right ammo corners.
-		ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 160.0f, io.DisplaySize.y - 42.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 120.0f, io.DisplaySize.y - 42.0f), ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.50f);
 		if (ImGui::Begin("##SFC_Combat", nullptr, flags)) {
-			ImGui::TextColored(accent, "WPN");
+			ImGui::TextColored(accent, "AMMO");
 			ImGui::SameLine();
-			const char* wpn = (snap.weaponStatus == ReadStatus::Valid && !snap.weaponName.empty())
-				? snap.weaponName.c_str() : "--";
-			if (snap.weaponStatus == ReadStatus::Valid && snap.ammoClip >= 0 && snap.ammoClipMax >= 0) {
-				if (snap.ammoReserve >= 0)
-					ImGui::Text("%s  |  AMMO %d/%d (%d)", wpn, snap.ammoClip, snap.ammoClipMax, snap.ammoReserve);
-				else
-					ImGui::Text("%s  |  AMMO %d/%d", wpn, snap.ammoClip, snap.ammoClipMax);
-			} else {
-				ImGui::Text("%s  |  AMMO --", wpn);
-			}
+			if (snap.weaponStatus == ReadStatus::Valid && snap.ammoClip >= 0)
+				ImGui::Text("%d / %d", snap.ammoClip, snap.ammoReserve >= 0 ? snap.ammoReserve : 0);
+			else if (snap.weaponStatus == ReadStatus::Valid && !snap.weaponName.empty())
+				ImGui::Text("%s", snap.weaponName.c_str());
+			else
+				ImGui::TextDisabled("--");
 		}
 		ImGui::End();
 	}

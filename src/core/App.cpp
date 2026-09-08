@@ -8,6 +8,7 @@
 #include "core/Hotkeys.hpp"
 #include "core/SearchIndex.hpp"
 #include "core/ConsoleBridge.hpp"
+#include "core/Cheats.hpp"
 #include "core/GameState.hpp"
 #include "core/Gameplay.hpp"
 #include "core/CompanionFollow.hpp"
@@ -46,7 +47,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s playable-v8 (light GameState HP/AP only while playing)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v17f (pitch invert + cam-node look)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);
@@ -58,11 +59,13 @@ bool App::Init(const char* runtimeDir)
 	cfg.Data().theme.crtEffects = false;
 	cfg.Data().theme.scanlines = false;
 	cfg.Data().theme.glow = false;
+	// ESP stays opt-in (off by default). Do not force-disable every boot — that
+	// made the ESP tab look permanently broken after the user enabled it.
 	if (cfg.Data().performance.espEnabled) {
-		cfg.Data().performance.espEnabled = false;
-		SFC_WARN("[CONFIG] ESP forced OFF for stability");
+		SFC_WARN("[CONFIG] ESP enabled — experimental (world scan + W2S)");
 	}
 	cfg.Data().diagnostics.enabled = true;
+	// Live stats come from vanilla HUD tiles (same as GetUIFloat), NOT ActorValueOwner.
 	cfg.Data().diagnostics.isolationMode = "off";
 	cfg.Data().hud.liveHud = true;
 	cfg.Data().hud.enabled = true;
@@ -71,7 +74,7 @@ bool App::Init(const char* runtimeDir)
 	cfg.Data().hud.worldInfo = true;
 	// Do NOT MarkDirty here — that forced a disk save mid-load and correlated with freezes.
 	IsolationLogBoot();
-	SFC_LOG("[CONFIG] isolation=off — light live HP/AP; caps/weapon when INSERT open");
+	SFC_LOG("[CONFIG] isolation=off — playable-v17 nearby scan / ESP");
 	BootMark("CONFIG", "loaded");
 	ResetWorldSettle("boot");
 
@@ -90,26 +93,17 @@ bool App::Init(const char* runtimeDir)
 	Hotkeys::Get().SetCallback("god_mode", []() {
 		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
 		if (!ConsoleBridge::Get().IsReady()) return;
-		ConsoleBridge::Get().Run("tgm");
-		Notify("God Mode toggled (F5)");
+		CheatToggleGodMode();
 	});
 	Hotkeys::Get().SetCallback("full_heal", []() {
 		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
 		if (!ConsoleBridge::Get().IsReady()) return;
-		const auto& snap = GameState::Get().Snapshot();
-		if (snap.valid && snap.healthStatus == ReadStatus::Valid && snap.healthMax > 0.f)
-			ConsoleBridge::Get().Runf("player.forceav health %.0f", snap.healthMax);
-		else
-			ConsoleBridge::Get().Run("player.forceav health 99999");
-		ConsoleBridge::Get().Run("player.forceav actionpoints 9999");
-		ConsoleBridge::Get().Run("player.forceav radiationrads 0");
-		Notify("Full heal (F6)");
+		CheatFullHeal();
 	});
 	Hotkeys::Get().SetCallback("add_caps", []() {
 		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
 		if (!ConsoleBridge::Get().IsReady()) return;
-		ConsoleBridge::Get().Run("player.additem 0000000f 1000");
-		Notify("+1000 Caps (F7)");
+		CheatAddCaps(1000);
 	});
 
 	// Prove which DLL file is actually loaded (stale-deploy trap).
@@ -224,7 +218,8 @@ void App::OnFrame()
 		ImGui::End();
 	} else {
 		Hud::Draw();
-		if (!Input::Get().MenuOpen() && !Input::Get().SearchOpen()) {
+		// ESP side list / boxes draw even with menu open (list is the reliable path).
+		if (!Input::Get().SearchOpen()) {
 			FeatureRegistry::Get().DrawHudAll();
 		}
 		if (IsolationAllowMainMenu()) {

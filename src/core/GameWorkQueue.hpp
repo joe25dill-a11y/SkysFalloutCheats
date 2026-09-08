@@ -32,7 +32,7 @@ public:
 	std::size_t PendingConsole() const;
 
 private:
-	static constexpr int kMaxPending = 48;
+	static constexpr int kMaxPending = 96;
 	char lines_[kMaxPending][512]{};
 	unsigned fireAtMs_[kMaxPending]{};
 	int head_ = 0;

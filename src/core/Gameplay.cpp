@@ -182,8 +182,9 @@ bool CanDrawOverlay()
 			return false;
 		}
 
-		// Same world exterior → exterior: keep overlay armed, soft-refresh reads.
-		GameState::Get().Invalidate("exterior_stream");
+		// Exterior grid streaming is normal while running — do NOT invalidate.
+		// Invalidating forced HP re-reads mid-stream and correlated with freezes.
+		GameState::Get().NoteExteriorStream();
 	}
 
 	return ObserveWorldReady();

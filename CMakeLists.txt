@@ -20,6 +20,8 @@ add_library(SkysFalloutCheats SHARED
   src/core/Hotkeys.cpp
   src/core/SearchIndex.cpp
   src/core/GameState.cpp
+  src/core/UiHud.cpp
+  src/core/Cheats.cpp
   src/core/Gameplay.cpp
   src/core/CompanionFollow.cpp
   src/core/Boot.cpp

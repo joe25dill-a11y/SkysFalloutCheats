@@ -1,5 +1,6 @@
 #include "core/Feature.hpp"
 #include "core/ConsoleBridge.hpp"
+#include "core/Cheats.hpp"
 #include "core/Log.hpp"
 #include "core/GameState.hpp"
 #include "ui/Notifications.hpp"
@@ -43,50 +44,39 @@ public:
 		const auto& snap = GameState::Get().Snapshot();
 
 		ImGui::SeparatorText("Live Status");
-		if (snap.valid) {
-			ImGui::Text("Level %d", snap.level);
-			ImGui::Text("HP  %.0f / %.0f", snap.health, snap.healthMax);
-			ImGui::Text("AP  %.0f / %.0f", snap.ap, snap.apMax);
-			if (snap.caps >= 0) ImGui::Text("Caps %d", snap.caps);
+		if (snap.valid && snap.healthStatus == ReadStatus::Valid) {
+			ImGui::Text("HP  %.0f%%", snap.health);
+			ImGui::Text("AP  %.0f%%", snap.ap);
+			if (snap.ammoClip >= 0)
+				ImGui::Text("Ammo %d / %d", snap.ammoClip, snap.ammoReserve);
 			if (!snap.location.empty()) ImGui::Text("Loc  %s", snap.location.c_str());
+			ImGui::TextDisabled("Synced from vanilla HUD (safe path)");
 		} else {
-			ImGui::TextDisabled("Waiting for player data...");
+			ImGui::TextDisabled("Waiting for vanilla HUD...");
 		}
 
 		ImGui::SeparatorText("Quick Actions");
 		ImGui::TextDisabled("Hotkeys: F5 God  |  F6 Heal  |  F7 +1000 Caps");
 		if (ImGui::Button("God Mode##player_quick_god")) {
-			console.Run("tgm");
+			CheatToggleGodMode();
 			godMode_ = !godMode_;
-			Notify(godMode_ ? "God Mode ON" : "God Mode toggled");
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Full Heal##player_quick_heal")) {
-			if (snap.valid && snap.healthMax > 0.f)
-				console.Runf("player.forceav health %.0f", snap.healthMax);
-			else
-				console.Run("player.forceav health 99999");
-			if (snap.valid && snap.apMax > 0.f)
-				console.Runf("player.forceav actionpoints %.0f", snap.apMax);
-			else
-				console.Run("player.forceav actionpoints 9999");
-			console.Run("player.forceav radiationrads 0");
-			Notify("Fully restored");
+			CheatFullHeal();
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("+1000 Caps##player_quick_caps")) {
-			console.Run("player.additem 0000000f 1000");
-			Notify("+1000 Caps");
+			CheatAddCaps(1000);
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("+10k Caps##player_quick_caps10k")) {
-			console.Run("player.additem 0000000f 10000");
-			Notify("+10000 Caps");
+			CheatAddCaps(10000);
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Repair Eq (srm)##player_quick_srm")) {
+		if (ImGui::Button("Open Repair Menu##player_quick_srm")) {
 			console.Run("player.srm");
-			Notify("Repair attempted");
+			Notify("Repair menu (srm)");
 		}
 
 		ImGui::SeparatorText("Karma / Fame");
@@ -122,13 +112,10 @@ public:
 		}
 
 		ImGui::SeparatorText("Health");
+		ImGui::TextDisabled("Full Heal uses restoreav (fills to your real max). Slider force is absolute.");
 		ImGui::SliderInt("Heal amount##player_heal_amt", &healAmount_, 1, 9999);
 		if (ImGui::Button("Full Heal##player_full_heal")) {
-			if (snap.valid && snap.healthMax > 0.f)
-				console.Runf("player.forceav health %.0f", snap.healthMax);
-			else
-				console.Run("player.forceav health 99999");
-			Notify("Health restored");
+			CheatFullHeal();
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Mod Health##player_mod_heal")) {
@@ -144,15 +131,13 @@ public:
 		ImGui::SeparatorText("AP");
 		ImGui::SliderInt("AP amount##player_ap_amt", &apAmount_, 1, 1000);
 		if (ImGui::Button("Restore AP##player_restore_ap")) {
-			if (snap.valid && snap.apMax > 0.f)
-				console.Runf("player.forceav actionpoints %.0f", snap.apMax);
-			else
-				console.Run("player.forceav actionpoints 9999");
-			Notify("Action Points restored");
+			console.Run("player.restoreav actionpoints 99999");
+			Notify("AP restored");
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Mod AP##player_mod_ap")) {
 			console.Runf("player.modav actionpoints %d", apAmount_);
+			Notify("AP modified");
 		}
 
 		ImGui::SeparatorText("Radiation");
@@ -212,19 +197,20 @@ public:
 		}
 
 		ImGui::SeparatorText("God Mode");
-		ImGui::TextUnformatted(godMode_ ? "Status: ON" : "Status: OFF");
-		if (ImGui::Checkbox("God Mode (tgm)##player_god", &godMode_)) {
-			console.Run("tgm");
-			Notify(godMode_ ? "God Mode enabled" : "God Mode toggled");
+		ImGui::TextUnformatted(godMode_ ? "UI hint: ON (tgm is a toggle — check in-game)" : "UI hint: OFF (tgm is a toggle)");
+		if (ImGui::Button("Toggle God Mode (tgm)##player_god_btn")) {
+			CheatToggleGodMode();
+			godMode_ = !godMode_;
+		}
+		ImGui::SameLine();
+		if (ImGui::Checkbox("Track as ON##player_god", &godMode_)) {
+			/* visual only — actual toggle is the button / F5 */
 		}
 
 		ImGui::SeparatorText("Restore Needs");
 		ImGui::TextDisabled("Hardcore needs (hunger / thirst / sleep)");
 		if (ImGui::Button("Restore All Needs##player_needs")) {
-			console.Run("player.forceav hunger 0");
-			console.Run("player.forceav dehydration 0");
-			console.Run("player.forceav sleepdeprivation 0");
-			Notify("Needs restored");
+			CheatRestoreNeeds();
 		}
 	}
 

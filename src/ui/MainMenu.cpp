@@ -3,6 +3,8 @@
 #include "core/Input.hpp"
 #include "core/FeatureRegistry.hpp"
 #include "core/Config.hpp"
+#include "core/Compat.hpp"
+#include "core/GameState.hpp"
 #include "imgui.h"
 #include <string>
 #include <cctype>
@@ -55,8 +57,24 @@ void MainMenu::Draw()
 	ImVec4 accent = Theme::Accent();
 	ImGui::TextColored(accent, "SKY'S FALLOUT CHEATS");
 	ImGui::SameLine();
-	ImGui::TextDisabled("  Utility Console // v0.1");
-	ImGui::TextDisabled("INSERT menu  |  ESC close  |  F1 search  |  HUD pauses only on doors/loads");
+	ImGui::TextDisabled("  Utility Console // playable-v17f");
+	{
+		const auto& snap = GameState::Get().Snapshot();
+		if (snap.valid && snap.healthStatus == ReadStatus::Valid) {
+			if (snap.ammoClip >= 0)
+				ImGui::Text("HP %.0f%%   AP %.0f%%   AMMO %d/%d   %s",
+					snap.health, snap.ap, snap.ammoClip, snap.ammoReserve,
+					snap.location.empty() ? "" : snap.location.c_str());
+			else
+				ImGui::Text("HP %.0f%%   AP %.0f%%   %s",
+					snap.health, snap.ap,
+					snap.location.empty() ? "" : snap.location.c_str());
+		} else {
+			ImGui::TextDisabled("Live HUD syncing from vanilla meters...");
+		}
+		ImGui::TextDisabled("INSERT menu  |  ESC close  |  F1 search  |  JIP=%s",
+			Compat().jipPresent ? "yes" : "no");
+	}
 	ImGui::Separator();
 
 	ImGui::BeginChild("##nav", ImVec2(180, 0), true);

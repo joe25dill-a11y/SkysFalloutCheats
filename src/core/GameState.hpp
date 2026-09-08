@@ -23,8 +23,9 @@ inline const char* ReadStatusName(ReadStatus s)
 struct NearbyMarker {
 	std::string name;
 	float distance = 0.f;
-	std::uint8_t kind = 0; // 0 npc, 1 loot/container, 2 door
+	std::uint8_t kind = 0; // 0 npc, 1 loot, 2 door, 3 container
 	float x = 0.f, y = 0.f, z = 0.f;
+	std::uint32_t refId = 0; // TESObjectREFR form id for console "xxxxxxxx".cmd
 };
 
 struct PlayerSnapshot {
@@ -61,6 +62,7 @@ public:
 	static GameState& Get();
 	void Tick(float dt);
 	void Invalidate(const char* reason);
+	void NoteExteriorStream(); // soft: pause refreshes briefly, keep last HUD
 	const PlayerSnapshot& Snapshot() const { return snap_; }
 	bool ReadsEnabled() const { return readsEnabled_; }
 
@@ -72,6 +74,7 @@ private:
 	float weaponAccum_ = 0.f;
 	float heavyAccum_ = 0.f;
 	float faultCooldown_ = 0.f;
+	float streamCooldown_ = 0.f; // skip AV refreshes while exterior cells stream
 	int faultStreak_ = 0;
 	int lightOkStreak_ = 0; // successful light reads before allowing weapon/process probes
 	bool readsEnabled_ = true;

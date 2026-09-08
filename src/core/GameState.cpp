@@ -2,11 +2,13 @@
 #include "core/Log.hpp"
 #include "core/Diag.hpp"
 #include "core/Input.hpp"
+#include "core/UiHud.hpp"
 #include "render/D3D9Hook.hpp"
 #include <windows.h>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 #include <vector>
 
@@ -43,6 +45,40 @@ constexpr std::ptrdiff_t kOff_MiddleHighActors = 0x000;
 
 constexpr std::ptrdiff_t kOff_PosX = 0x030;
 constexpr std::ptrdiff_t kOff_ParentCell = 0x040;
+constexpr std::ptrdiff_t kOff_RenderState = 0x064;
+constexpr std::ptrdiff_t kOff_RsNiNode = 0x014;       // RenderState::niNode
+// JIP NiAVObject: m_transformWorld @ 0x68, translate @ +0x24 → 0x8C
+constexpr std::ptrdiff_t kOff_NodeWorldTranslate = 0x08C;
+constexpr float kUnitsPerFoot = 128.f / 6.f; // Bethesda: 128 units = 6 feet
+
+// Prefer REFR pos (same space as setpos / player rot). NiNode only as fallback.
+bool ReadRefWorldPos(void* refr, float* ox, float* oy, float* oz)
+{
+	if (!refr || !ox || !oy || !oz) return false;
+	__try {
+		*ox = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX);
+		*oy = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX + 4);
+		*oz = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX + 8);
+		if (std::isfinite(*ox) && std::isfinite(*oy) && std::isfinite(*oz))
+			return true;
+
+		void* rs = *reinterpret_cast<void**>(reinterpret_cast<char*>(refr) + kOff_RenderState);
+		if (rs) {
+			void* node = *reinterpret_cast<void**>(reinterpret_cast<char*>(rs) + kOff_RsNiNode);
+			if (node) {
+				const float* t = reinterpret_cast<const float*>(reinterpret_cast<char*>(node) + kOff_NodeWorldTranslate);
+				if (std::isfinite(t[0]) && std::isfinite(t[1]) && std::isfinite(t[2])) {
+					*ox = t[0]; *oy = t[1]; *oz = t[2];
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
 constexpr std::ptrdiff_t kOff_ExtraList = 0x044;
 constexpr std::ptrdiff_t kOff_BaseForm = 0x020;
 constexpr std::ptrdiff_t kOff_AVOwner = 0x0A4;
@@ -211,36 +247,219 @@ bool IsLootBaseType(std::uint8_t t)
 
 const char* NameForRef(void* refr); // defined below
 
+struct ActorMarkPod {
+	float x, y, z, dist;
+	std::uint32_t refId;
+	const char* name;
+};
+
+bool TryActorMarkPod(void* actor, void* player, float maxDist, ActorMarkPod* out)
+{
+	if (!actor || !out || actor == player) return false;
+	__try {
+		float px, py, pz, x, y, z;
+		if (!ReadRefWorldPos(player, &px, &py, &pz)) return false;
+		if (!ReadRefWorldPos(actor, &x, &y, &z)) return false;
+		const float dx = x - px, dy = y - py, dz = z - pz;
+		const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+		if (!std::isfinite(dist) || dist > maxDist) return false;
+		out->x = x; out->y = y; out->z = z; out->dist = dist;
+		out->refId = FormRefId(actor);
+		out->name = NameForRef(actor);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
 void AppendActorMarker(void* actor, void* player, float maxDist, std::vector<NearbyMarker>& tmp)
 {
-	if (!actor || actor == player) return;
-	const float px = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX);
-	const float py = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 4);
-	const float pz = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 8);
-	const float x = *reinterpret_cast<float*>(reinterpret_cast<char*>(actor) + kOff_PosX);
-	const float y = *reinterpret_cast<float*>(reinterpret_cast<char*>(actor) + kOff_PosX + 4);
-	const float z = *reinterpret_cast<float*>(reinterpret_cast<char*>(actor) + kOff_PosX + 8);
-	const float dx = x - px, dy = y - py, dz = z - pz;
-	const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-	if (!std::isfinite(dist) || dist > maxDist) return;
-
+	ActorMarkPod pod{};
+	if (!TryActorMarkPod(actor, player, maxDist, &pod)) return;
 	NearbyMarker m;
 	m.kind = 0;
-	m.distance = dist;
-	m.x = x; m.y = y; m.z = z;
-	if (const char* nm = NameForRef(actor)) m.name = nm;
-	else m.name = "NPC";
+	m.distance = pod.dist;
+	m.x = pod.x; m.y = pod.y; m.z = pod.z;
+	m.refId = pod.refId;
+	m.name = pod.name ? pod.name : "NPC";
 	tmp.push_back(std::move(m));
 }
 
 void WalkActorList(void* listObj, void* player, float maxDist, std::vector<NearbyMarker>& tmp)
 {
+	// tList uses an embedded dummy head: { item=null, next=first }.
 	struct Node { void* actor; Node* next; };
-	int guard = 0;
-	for (Node* n = reinterpret_cast<Node*>(listObj); n && guard < 4096; n = n->next, ++guard) {
-		if (!n->actor) continue;
-		AppendActorMarker(n->actor, player, maxDist, tmp);
+	Node* n = nullptr;
+	__try {
+		n = reinterpret_cast<Node*>(listObj);
 	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return;
+	}
+	for (int guard = 0; n && guard < 4096; ++guard) {
+		void* actor = nullptr;
+		Node* next = nullptr;
+		__try {
+			actor = n->actor;
+			next = n->next;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			break;
+		}
+		if (actor) AppendActorMarker(actor, player, maxDist, tmp);
+		n = next;
+	}
+}
+
+void* ReadPlayerCell(void* player)
+{
+	__try {
+		return *reinterpret_cast<void**>(reinterpret_cast<char*>(player) + kOff_ParentCell);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return nullptr;
+	}
+}
+
+bool ReadPlayerPos(void* player, float* px, float* py, float* pz)
+{
+	return ReadRefWorldPos(player, px, py, pz);
+}
+
+struct CellNode { void* refr; CellNode* next; };
+
+CellNode* ReadCellListHead(void* cell)
+{
+	__try {
+		return reinterpret_cast<CellNode*>(reinterpret_cast<char*>(cell) + kOff_CellObjectList);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return nullptr;
+	}
+}
+
+bool ReadCellNode(CellNode* n, void** refrOut, CellNode** nextOut)
+{
+	__try {
+		*refrOut = n->refr;
+		*nextOut = n->next;
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
+struct CellMarkPod {
+	std::uint8_t kind;
+	float x, y, z, dist;
+	std::uint32_t refId;
+	const char* name;
+};
+
+bool TryCellMarkPod(void* refr, void* player, float px, float py, float pz, float maxDist,
+	bool npcs, bool loot, bool doors, CellMarkPod* out)
+{
+	if (!refr || !out || refr == player) return false;
+	__try {
+		const auto rt = FormTypeId(refr);
+		std::uint8_t kind = 255;
+		if (npcs && (rt == kFormType_Character || rt == kFormType_Creature)) {
+			kind = 0;
+		} else {
+			void* base = *reinterpret_cast<void**>(reinterpret_cast<char*>(refr) + kOff_BaseForm);
+			if (!base) return false;
+			const auto bt = FormTypeId(base);
+			if (doors && bt == kFormType_TESObjectDOOR) kind = 2;
+			else if (loot && bt == kFormType_TESObjectCONT) kind = 3;
+			else if (loot && IsLootBaseType(bt)) kind = 1;
+			else return false;
+		}
+		if (kind == 255) return false;
+
+		float x, y, z;
+		if (!ReadRefWorldPos(refr, &x, &y, &z)) return false;
+		const float dx = x - px, dy = y - py, dz = z - pz;
+		const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+		if (!std::isfinite(dist) || dist > maxDist) return false;
+
+		out->kind = kind;
+		out->x = x; out->y = y; out->z = z; out->dist = dist;
+		out->refId = FormRefId(refr);
+		out->name = NameForRef(refr);
+		return true;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
+void ScanCellObjects(void* player, float maxDist, bool npcs, bool loot, bool doors,
+	std::vector<NearbyMarker>& tmp)
+{
+	void* cell = ReadPlayerCell(player);
+	if (!cell || (!loot && !doors && !npcs)) return;
+	float px = 0, py = 0, pz = 0;
+	if (!ReadPlayerPos(player, &px, &py, &pz)) return;
+
+	CellNode* n = ReadCellListHead(cell);
+	for (int guard = 0; n && guard < 8192; ++guard) {
+		void* refr = nullptr;
+		CellNode* next = nullptr;
+		if (!ReadCellNode(n, &refr, &next)) break;
+		n = next;
+		CellMarkPod pod{};
+		if (!TryCellMarkPod(refr, player, px, py, pz, maxDist, npcs, loot, doors, &pod)) continue;
+		NearbyMarker m;
+		m.kind = pod.kind;
+		m.distance = pod.dist;
+		m.x = pod.x; m.y = pod.y; m.z = pod.z;
+		m.refId = pod.refId;
+		if (pod.name) m.name = pod.name;
+		else m.name = pod.kind == 0 ? "NPC" : (pod.kind == 2 ? "Door" : (pod.kind == 3 ? "Container" : "Loot"));
+		tmp.push_back(std::move(m));
+	}
+}
+
+void ScanNearbyImpl(void* player, float maxDist, int maxMarkers, bool npcs, bool loot, bool doors,
+	std::vector<NearbyMarker>& out)
+{
+	out.clear();
+	std::vector<NearbyMarker> tmp;
+	tmp.reserve(64);
+
+	if (npcs) {
+		auto* mgr = reinterpret_cast<char*>(Rel(kActorProcessMgrAbs));
+		WalkActorList(mgr + kOff_HighActors, player, maxDist, tmp);
+		WalkActorList(mgr + kOff_MiddleHighActors, player, maxDist, tmp);
+	}
+
+	ScanCellObjects(player, maxDist, npcs, loot, doors, tmp);
+
+	std::sort(tmp.begin(), tmp.end(), [](const NearbyMarker& a, const NearbyMarker& b) {
+		if (a.distance != b.distance) return a.distance < b.distance;
+		return a.name < b.name;
+	});
+	std::vector<NearbyMarker> dedup;
+	dedup.reserve(tmp.size());
+	for (auto& m : tmp) {
+		bool skip = false;
+		for (const auto& d : dedup) {
+			if (m.refId != 0 && d.refId == m.refId) {
+				skip = true;
+				break;
+			}
+			if (m.refId == 0 && d.kind == m.kind && d.name == m.name && std::fabs(d.distance - m.distance) < 2.f) {
+				skip = true;
+				break;
+			}
+		}
+		if (!skip) dedup.push_back(std::move(m));
+	}
+
+	if (static_cast<int>(dedup.size()) > maxMarkers) dedup.resize(static_cast<size_t>(maxMarkers));
+	out = std::move(dedup);
 }
 
 int CountFromEntry(void* entry)
@@ -306,50 +525,48 @@ void ReadCellName(void* player, char* out, size_t outLen)
 	if (name) strncpy_s(out, outLen, name, _TRUNCATE);
 }
 
+// Minimal AV path only — Fn_01/Fn_06 (ST0) + Fn_08 (EAX bits).
+// Do NOT CallAvSt0 on Fn_03 (returns EAX; that unbalances the FPU and crashes later).
+// No C++ objects / lambdas inside __try (MSVC SEH rule).
+float ReadCurrentAv(void* av, void* fn01, void* fn06, std::uint32_t code, float maxHint)
+{
+	float cur = 0.f;
+	if (fn01 && fn06) {
+		cur = CallAvSt0(fn01, av, code) + CallAvSt0(fn06, av, code);
+		if (AvLooksOk(cur, maxHint, true)) return cur;
+	}
+	if (maxHint > 1.f) return maxHint;
+	return 0.f;
+}
+
 bool ReadActorValues(void* player, float& health, float& healthMax, float& ap, float& apMax, int& level)
 {
 	struct AVOwner { void** vtbl; };
 	auto* av = reinterpret_cast<AVOwner*>(reinterpret_cast<char*>(player) + kOff_AVOwner);
 	if (!av || !av->vtbl) return false;
 
+	health = healthMax = ap = apMax = 0.f;
+	level = 0;
+
 	__try {
-		void* fn01 = av->vtbl[1]; // base ST0
-		void* fn02 = av->vtbl[2]; // current EAX bits
-		void* fn03 = av->vtbl[3]; // current EAX bits (Eval)
-		void* fn06 = av->vtbl[6]; // damage/mod ST0 (added to base)
-		void* fn08 = av->vtbl[8]; // permanent EAX bits
-		using GetLevelFn = std::uint16_t(__thiscall*)(AVOwner*);
-		auto getLevel = reinterpret_cast<GetLevelFn>(av->vtbl[0xA]);
+		void* fn01 = av->vtbl[1];
+		void* fn06 = av->vtbl[6];
+		void* fn08 = av->vtbl[8];
+		void* fn0A = av->vtbl[0xA]; // GetLevel — documented in NVSE ActorValueOwner
 
 		healthMax = CallAvEaxBits(fn08, av, kAV_Health);
 		apMax = CallAvEaxBits(fn08, av, kAV_ActionPoints);
 		if (!AvLooksOk(healthMax, 0.f, false)) healthMax = CallAvSt0(fn01, av, kAV_Health);
 		if (!AvLooksOk(apMax, 0.f, false)) apMax = CallAvSt0(fn01, av, kAV_ActionPoints);
 
-		// Current HP/AP: prefer base + damage/mod (NVSE: Fn_06 added to Fn_01).
-		// Fn_02/03 often return 0 via our call path; treating 0 as "valid" blocked the fallback.
-		auto readCurrent = [&](std::uint32_t code, float maxHint) -> float {
-			float cur = 0.f;
-			if (fn01 && fn06) {
-				cur = CallAvSt0(fn01, av, code) + CallAvSt0(fn06, av, code);
-				if (AvLooksOk(cur, maxHint, true) && cur > 0.f) return cur;
-			}
-			cur = CallAvEaxBits(fn02, av, code);
-			if (AvLooksOk(cur, maxHint, true) && cur > 0.f) return cur;
-			cur = CallAvEaxBits(fn03, av, code);
-			if (AvLooksOk(cur, maxHint, true) && cur > 0.f) return cur;
-			// ST0 attempt on Fn_03 (some builds)
-			cur = CallAvSt0(fn03, av, code);
-			if (AvLooksOk(cur, maxHint, true) && cur > 0.f) return cur;
-			// Full health / full AP display fallback when max is known
-			if (maxHint > 1.f) return maxHint;
-			return 0.f;
-		};
+		health = ReadCurrentAv(av, fn01, fn06, kAV_Health, healthMax);
+		ap = ReadCurrentAv(av, fn01, fn06, kAV_ActionPoints, apMax);
 
-		health = readCurrent(kAV_Health, healthMax);
-		ap = readCurrent(kAV_ActionPoints, apMax);
-
-		if (getLevel) level = static_cast<int>(getLevel(av));
+		if (fn0A) {
+			using GetLevelFn = std::uint16_t(__thiscall*)(void*);
+			level = static_cast<int>(reinterpret_cast<GetLevelFn>(fn0A)(av));
+			if (level < 0 || level > 1000) level = 0;
+		}
 		return AvLooksOk(healthMax, 0.f, false) || AvLooksOk(apMax, 0.f, false) || health > 0.f;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) {
@@ -444,88 +661,6 @@ const char* NameForRef(void* refr)
 	return ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ContFullName);
 }
 
-void ScanNearbyImpl(void* player, float maxDist, int maxMarkers, bool npcs, bool loot, bool doors,
-	std::vector<NearbyMarker>& out)
-{
-	out.clear();
-	std::vector<NearbyMarker> tmp;
-	tmp.reserve(64);
-
-	if (npcs) {
-		// High-process actors (most reliable for living NPCs in the loaded area).
-		auto* mgr = reinterpret_cast<char*>(Rel(kActorProcessMgrAbs));
-		WalkActorList(mgr + kOff_HighActors, player, maxDist, tmp);
-		WalkActorList(mgr + kOff_MiddleHighActors, player, maxDist, tmp);
-	}
-
-	void* cell = *reinterpret_cast<void**>(reinterpret_cast<char*>(player) + kOff_ParentCell);
-	if (cell && (loot || doors || npcs)) {
-		const float px = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX);
-		const float py = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 4);
-		const float pz = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 8);
-
-		void* listObj = reinterpret_cast<char*>(cell) + kOff_CellObjectList;
-		struct Node { void* refr; Node* next; };
-		int guard = 0;
-		for (Node* n = reinterpret_cast<Node*>(listObj); n && guard < 8192; n = n->next, ++guard) {
-			void* refr = n->refr;
-			if (!refr || refr == player) continue;
-
-			const auto rt = FormTypeId(refr);
-			std::uint8_t kind = 255;
-
-			if (npcs && (rt == kFormType_Character || rt == kFormType_Creature)) {
-				// May already be in process lists — still OK, we'll dedupe by name+dist later if needed.
-				kind = 0;
-			} else {
-				void* base = *reinterpret_cast<void**>(reinterpret_cast<char*>(refr) + kOff_BaseForm);
-				if (!base) continue;
-				const auto bt = FormTypeId(base);
-				if (loot && (bt == kFormType_TESObjectCONT || IsLootBaseType(bt))) kind = 1;
-				else if (doors && bt == kFormType_TESObjectDOOR) kind = 2;
-				else continue;
-			}
-			if (kind == 255) continue;
-
-			const float x = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX);
-			const float y = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX + 4);
-			const float z = *reinterpret_cast<float*>(reinterpret_cast<char*>(refr) + kOff_PosX + 8);
-			const float dx = x - px, dy = y - py, dz = z - pz;
-			const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-			if (!std::isfinite(dist) || dist > maxDist) continue;
-
-			NearbyMarker m;
-			m.kind = kind;
-			m.distance = dist;
-			m.x = x; m.y = y; m.z = z;
-			if (const char* nm = NameForRef(refr)) m.name = nm;
-			else m.name = kind == 0 ? "NPC" : (kind == 2 ? "Door" : "Loot");
-			tmp.push_back(std::move(m));
-		}
-	}
-
-	// Dedupe roughly (same name + similar distance).
-	std::sort(tmp.begin(), tmp.end(), [](const NearbyMarker& a, const NearbyMarker& b) {
-		if (a.distance != b.distance) return a.distance < b.distance;
-		return a.name < b.name;
-	});
-	std::vector<NearbyMarker> dedup;
-	dedup.reserve(tmp.size());
-	for (auto& m : tmp) {
-		bool skip = false;
-		for (const auto& d : dedup) {
-			if (d.kind == m.kind && d.name == m.name && std::fabs(d.distance - m.distance) < 2.f) {
-				skip = true;
-				break;
-			}
-		}
-		if (!skip) dedup.push_back(std::move(m));
-	}
-
-	if (static_cast<int>(dedup.size()) > maxMarkers) dedup.resize(static_cast<size_t>(maxMarkers));
-	out = std::move(dedup);
-}
-
 struct PodSnap {
 	int valid = 0;
 	int stage = 0;
@@ -565,9 +700,17 @@ PodSnap RefreshPod(bool includeHeavy)
 		s.healthStatus = 2;
 
 		s.valid = 1;
-		s.posX = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX);
-		s.posY = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 4);
-		s.posZ = *reinterpret_cast<float*>(reinterpret_cast<char*>(player) + kOff_PosX + 8);
+		if (ReadRefWorldPos(player, &s.posX, &s.posY, &s.posZ)) {
+			s.hasPos = 1;
+		} else {
+			SFC_ERR("[GAME_READY] player XYZ unavailable — overlay hard-disabled");
+			HardDisableOverlayDraws("player_xyz_nan");
+			s.hasPos = 0;
+			s.posX = s.posY = s.posZ = 0.f;
+			s.valid = 0;
+			s.stage = 6;
+			return s;
+		}
 		if (!std::isfinite(s.posX) || !std::isfinite(s.posY) || !std::isfinite(s.posZ)) {
 			SFC_ERR("[GAME_READY] player XYZ became NaN/Inf — overlay hard-disabled");
 			HardDisableOverlayDraws("player_xyz_nan");
@@ -629,12 +772,13 @@ PodSnap RefreshPod(bool includeHeavy)
 bool ScanNearbySafe(void* player, float maxDist, int maxMarkers, bool npcs, bool loot, bool doors,
 	std::vector<NearbyMarker>& out)
 {
+	// Per-node SEH lives inside ScanNearbyImpl. Outer catch is last-resort only —
+	// do NOT clear `out` here; caller keeps the previous good snapshot on failure.
 	__try {
 		ScanNearbyImpl(player, maxDist, maxMarkers, npcs, loot, doors, out);
 		return true;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) {
-		out.clear();
 		return false;
 	}
 }
@@ -674,108 +818,68 @@ void GameState::Invalidate(const char* reason)
 		DiagThrottle("GameState.invalidate", 750, "%s", reason);
 }
 
+void GameState::NoteExteriorStream()
+{
+	// Hold off AV vtable calls for ~2.5s while the world streams; keep last HP on HUD.
+	streamCooldown_ = 2.5f;
+	DiagThrottle("GameState.stream_pause", 2000, "exterior_stream");
+}
+
 void GameState::Tick(float dt)
 {
-	if (!readsEnabled_) {
-		faultCooldown_ -= dt;
-		if (faultCooldown_ <= 0.f) {
-			readsEnabled_ = true;
-			faultStreak_ = 0;
-			SFC_LOG("[GAME_READY] GameState reads re-enabled after cooldown");
-		}
-		snap_.status = ReadStatus::Unavailable;
-		snap_.valid = false;
-		return;
-	}
-
+	// playable-v13: meters for HP/AP %; ActionPoints text "12/5" is ammo (not AP).
 	refreshAccum_ += dt;
-	weaponAccum_ += dt;
-	// Light HP/AP only at 1 Hz — full caps/weapon/cell only when INSERT is open.
-	if (refreshAccum_ < 1.0f) return;
+	if (refreshAccum_ < 0.35f) return;
 	refreshAccum_ = 0.f;
 
-	const bool menuOpen = Input::Get().MenuOpen();
-	const bool wantHeavy = menuOpen && (weaponAccum_ >= 2.0f);
-	if (wantHeavy)
-		weaponAccum_ = 0.f;
+	UiHudDumpHitPointsOnce();
 
-	const unsigned t0 = GetTickCount();
-	PodSnap pod = RefreshPodSealed(wantHeavy);
-	const unsigned readMs = GetTickCount() - t0;
-
-	if (pod.stage < 0 || (pod.stage > 0 && pod.stage < 11 && !pod.valid && pod.healthStatus == 1)) {
-		++faultStreak_;
-		lightOkStreak_ = 0;
-		if (faultStreak_ >= 8) {
-			readsEnabled_ = false;
-			faultCooldown_ = 15.f;
-			faultStreak_ = 0;
-			SFC_ERR("[GAME_READY] GameState fault streak — disabling reads for 15s (stage=%d)", pod.stage);
-			Invalidate("fault_streak");
-			DiagEvent("GameState.read", "fault_streak");
-			return;
-		}
-	} else if (pod.valid) {
-		faultStreak_ = 0;
-		if (lightOkStreak_ < 1000)
-			++lightOkStreak_;
-	}
-
-	static int cool = 0;
-	if (cool-- <= 0) {
-		cool = 30;
-		SFC_LOG("GameState stage=%d status=%s hp=%s:%.0f/%.0f caps=%s:%d wpn=%s:%s heavy=%d",
-			pod.stage,
-			pod.valid ? "VALID" : (pod.stage <= 3 ? "UNAVAILABLE" : "INVALID"),
-			pod.healthStatus == 2 ? "VALID" : (pod.healthStatus == 1 ? "INVALID" : "UNAVAILABLE"),
-			pod.health, pod.healthMax,
-			pod.capsStatus == 2 ? "VALID" : (pod.capsStatus == 1 ? "INVALID" : "UNAVAILABLE"),
-			pod.caps,
-			pod.weaponStatus == 2 ? "VALID" : (pod.weaponStatus == 1 ? "INVALID" : "LIGHT"),
-			pod.weapon[0] ? pod.weapon : (snap_.weaponName.empty() ? "-" : snap_.weaponName.c_str()),
-			wantHeavy ? 1 : 0);
-	}
-
-	if (!pod.valid) {
-		snap_.valid = false;
-		snap_.status = (pod.stage <= 3) ? ReadStatus::Unavailable : ReadStatus::Invalid;
-		snap_.stage = pod.stage;
-		DiagThrottle("GameState.read.fail", 1000, "stage=%d ms=%u", pod.stage, readMs);
-		return; // keep previous HP/caps/weapon on the HUD during brief failures
+	UiHudStats ui{};
+	if (!TryReadUiHudStats(ui) || !ui.ok) {
+		DiagThrottle("GameState.ui.miss", 5000, "no HUD traits yet");
+		return;
 	}
 
 	PlayerSnapshot s = snap_;
 	s.valid = true;
 	s.status = ReadStatus::Valid;
-	s.stage = pod.stage;
-	s.healthStatus = static_cast<ReadStatus>(pod.healthStatus);
-	s.health = pod.health;
-	s.healthMax = pod.healthMax;
-	s.ap = pod.ap;
-	s.apMax = pod.apMax;
-	s.level = pod.level;
-	if (wantHeavy) {
-		s.capsStatus = static_cast<ReadStatus>(pod.capsStatus);
-		s.caps = pod.caps;
-		if (pod.location[0]) s.location = pod.location;
-		s.weaponStatus = static_cast<ReadStatus>(pod.weaponStatus);
-		if (pod.weaponStatus == 2) {
-			if (pod.weapon[0]) s.weaponName = pod.weapon;
-			else s.weaponName = "Unarmed";
-			s.ammoClip = pod.ammoClip;
-			s.ammoClipMax = pod.ammoClipMax;
-			s.ammoReserve = pod.ammoReserve;
-		}
-		s.gameHour = pod.gameHour;
+	s.stage = 11;
+
+	// HP/AP are bar percentages from vanilla meters (absolute AV reads crash).
+	if (ui.hpFill >= 0.f) {
+		s.healthStatus = ReadStatus::Valid;
+		s.health = ui.hpFill * 100.f;
+		s.healthMax = 100.f;
 	}
-	s.hasPos = pod.hasPos != 0;
-	s.posX = pod.posX;
-	s.posY = pod.posY;
-	s.posZ = pod.posZ;
-	s.nearby = std::move(snap_.nearby);
+	if (ui.apFill >= 0.f) {
+		s.ap = ui.apFill * 100.f;
+		s.apMax = 100.f;
+	}
+
+	if (ui.ammoClip >= 0) {
+		s.weaponStatus = ReadStatus::Valid;
+		s.ammoClip = ui.ammoClip;
+		s.ammoReserve = ui.ammoReserve;
+		if (ui.ammoText[0]) s.weaponName = ui.ammoText;
+		else {
+			char buf[32]{};
+			std::snprintf(buf, sizeof(buf), "%d/%d", ui.ammoClip, ui.ammoReserve);
+			s.weaponName = buf;
+		}
+	} else if (ui.ammoText[0]) {
+		s.weaponStatus = ReadStatus::Valid;
+		s.weaponName = ui.ammoText;
+	}
+
+	if (ui.location[0])
+		s.location = ui.location;
+	// else keep previous location (Region_Location is often blank)
+
 	snap_ = std::move(s);
-	DiagThrottle("GameState.read.ok", 5000, "stage=%d ms=%u heavy=%d",
-		pod.stage, readMs, wantHeavy ? 1 : 0);
+	DiagThrottle("GameState.ui.ok", 5000, "hp=%.0f%% ap=%.0f%% ammo=%s loc=%s",
+		snap_.health, snap_.ap,
+		snap_.weaponName.empty() ? "-" : snap_.weaponName.c_str(),
+		snap_.location.empty() ? "-" : snap_.location.c_str());
 }
 
 void GameState::ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, bool doors)
@@ -784,6 +888,7 @@ void GameState::ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, 
 		snap_.nearby.clear();
 		return;
 	}
+	// Explicit disable / clear request from ESP when turned off.
 	if (maxMarkers <= 0 || maxDist <= 0.f || (!npcs && !loot && !doors)) {
 		snap_.nearby.clear();
 		return;
@@ -792,11 +897,15 @@ void GameState::ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, 
 	void** slot = reinterpret_cast<void**>(Rel(kThePlayerAbs));
 	void* player = slot ? *slot : nullptr;
 	if (!player) {
-		snap_.nearby.clear();
+		// Keep last markers — player pointer can flicker during loads.
 		return;
 	}
 	std::vector<NearbyMarker> markers;
-	ScanNearbySafe(player, maxDist, maxMarkers, npcs, loot, doors, markers);
+	if (!ScanNearbySafe(player, maxDist, maxMarkers, npcs, loot, doors, markers)) {
+		SFC_WARN("ESP scan fault — keeping last markers=%d",
+			static_cast<int>(snap_.nearby.size()));
+		return;
+	}
 	snap_.nearby = std::move(markers);
 }
 

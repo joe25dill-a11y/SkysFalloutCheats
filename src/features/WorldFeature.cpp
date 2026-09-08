@@ -15,13 +15,17 @@ struct WeatherPreset {
 };
 
 const WeatherPreset kWeather[] = {
+	// Verified-ish vanilla / common Mojave weathers (editor IDs).
 	{"Clear", "NVWastelandClear"},
-	{"Cloudy", "NVWastelandCloudy"},
-	{"Overcast", "NVWastelandOvercast"},
-	{"Rainy", "NVWastelandRainy"},
-	{"Dusty", "NVWastelandDusty"},
-	{"Foggy", "NVWastelandFoggy"},
-	{"Radstorm", "NVWastelandRadstorm"},
+	{"Goodsprings", "NVWastelandGS"},
+	{"Borders", "NVWastelandBorders"},
+	{"Clear East", "NVWastelandClearEast"},
+	{"Urban Clear", "NVUrbanClear"},
+	{"The Strip", "NVTheStripWeather"},
+	{"Overcast", "WastelandOvercast"},
+	{"Dust Storm", "NVDustStorm"},
+	// FormID fallbacks some installs resolve more reliably:
+	{"Clear (ID)", "00064609"},
 };
 
 } // namespace
@@ -91,6 +95,7 @@ public:
 		}
 
 		ImGui::SeparatorText("Weather");
+		ImGui::TextDisabled("FNV has weather — dust/haze/clear. Look up at the sky after clicking.");
 		for (const auto& w : kWeather) {
 			ImGui::PushID(w.id);
 			if (ImGui::SmallButton(w.name)) {
@@ -105,6 +110,11 @@ public:
 		if (ImGui::Button("Force Weather (fw)##world_fw")) {
 			console.Runf("fw %s", weatherBuf_);
 			Notify("Weather forced");
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Release Weather (rw)##world_rw")) {
+			console.Run("rw");
+			Notify("Weather released to normal");
 		}
 
 		ImGui::SeparatorText("World Tools");

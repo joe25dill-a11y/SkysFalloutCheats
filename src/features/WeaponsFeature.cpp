@@ -124,20 +124,16 @@ public:
 		auto& console = ConsoleBridge::Get();
 
 		ImGui::SeparatorText("Repair");
+		ImGui::TextDisabled("srm opens the vanilla repair menu. Health %% tries setweaponhealthperc.");
 		ImGui::SliderInt("Weapon health %%##weap_hp", &weaponHealth_, 1, 100);
-		if (ImGui::Button("Repair Current (srm)##weap_srm")) {
+		if (ImGui::Button("Open Repair Menu (srm)##weap_srm")) {
 			console.Run("player.srm");
-			Notify("Repair attempted (srm)");
+			Notify("Repair menu opened");
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Set Weapon Health##weap_sethp")) {
-			console.Runf("player.setweaponhealth %d", weaponHealth_);
-			Notify("Set weapon health");
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Repair Inventory (player.srm)##weap_srm2")) {
-			console.Run("player.srm");
-			Notify("srm sent");
+		if (ImGui::Button("Set Weapon Health %%##weap_sethp")) {
+			console.Runf("player.setweaponhealthperc %d", weaponHealth_);
+			Notify("Set weapon health %%");
 		}
 
 		ImGui::SeparatorText("Ammo");
