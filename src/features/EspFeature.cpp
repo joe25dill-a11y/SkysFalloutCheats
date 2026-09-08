@@ -97,8 +97,8 @@ public:
 		auto& perf = Config::Get().Data().performance;
 		ImGui::SeparatorText("Overlay");
 		ImGui::TextWrapped(
-			"Side list works with the menu open. World boxes need a valid camera (W2S). "
-			"For Heal/Revive use NPCs tab → Scan area.");
+			"Boxes use live FOV + 8-corner world projection. Buildings do not hide overlays. "
+			"Heal/Revive → NPCs tab → Scan area.");
 		if (ImGui::Checkbox("Enable ESP##esp_enable", &enabled_)) {
 			Config::Get().Data().performance.espEnabled = enabled_;
 			Config::Get().MarkDirty();
@@ -136,11 +136,16 @@ public:
 			lastScan_ = static_cast<int>(GameState::Get().Snapshot().nearby.size());
 		}
 		ImGui::SameLine();
-		ImGui::Text("Scanned: %d   Boxes drawn last: %d", lastScan_, lastDrawn_);
+		ImGui::Text("Scan:%d  W2S ok:%d fail:%d  reject:%d  boxes:%d",
+			lastScan_, lastW2sOk_, lastW2sFail_, lastRejected_, lastDrawn_);
+		EspCamInfo cam{};
+		if (GetEspCamInfo(cam))
+			ImGui::TextDisabled("Cam fov=%.1f° src=%d fovSrc=%d  (ALT should change fov)",
+				cam.fovDeg, cam.source, cam.fovSource);
 		if (lastScan_ == 0 && enabled_)
 			ImGui::TextDisabled("Nothing in range — walk near NPCs/doors and Scan.");
 		else if (lastScan_ > 0 && lastDrawn_ == 0 && drawBoxes_)
-			ImGui::TextDisabled("Scan OK — if no boxes, use the list (W2S may fail).");
+			ImGui::TextDisabled("Scan OK — W2S failing or all behind camera.");
 
 		ImGui::SeparatorText("Nearby right now");
 		const auto& markers = GameState::Get().Snapshot().nearby;
@@ -171,28 +176,36 @@ public:
 		const ImVec2 disp = ImGui::GetIO().DisplaySize;
 
 		int drawn = 0;
+		int w2sOk = 0;
 		int w2sFail = 0;
+		int rejected = 0;
+		int candidates = 0;
 		if (drawBoxes_) {
 			for (const auto& m : markers) {
 				if (!KindWanted(m.kind, showNpcs_, showLoot_, showContainers_, showDoors_)) continue;
+				++candidates;
 				float halfW = 0, halfH = 0, halfD = 0;
 				BoxExtentsForKind(m.kind, halfW, halfH, halfD);
 
 				float minX, minY, maxX, maxY;
 				bool got = WorldBoxToScreenRect(m.x, m.y, m.z, halfW, halfH, halfD, minX, minY, maxX, maxY);
 				if (!got) {
+					// Center point probe so we can separate "all corners failed" vs box math.
 					ScreenPos sp = WorldToScreen(m.x, m.y, m.z + halfH);
 					if (!sp.ok) {
 						++w2sFail;
 						continue;
 					}
+					++w2sOk;
 					minX = sp.x - 18.f; maxX = sp.x + 18.f;
 					minY = sp.y - 48.f; maxY = sp.y + 8.f;
+				} else {
+					++w2sOk;
 				}
 
-				// Clamp instead of skip — partial on-screen still draws.
+				// Fully off-screen → count as rejected (still projected). Partial stays.
 				if (maxX < 2.f || maxY < 2.f || minX > disp.x - 2.f || minY > disp.y - 2.f) {
-					++w2sFail;
+					++rejected;
 					continue;
 				}
 				minX = (std::max)(0.f, minX);
@@ -203,7 +216,6 @@ public:
 				const ImU32 col = ColorForKind(m.kind);
 				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), IM_COL32(0, 0, 0, 220), 0.f, 0, 4.0f);
 				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 2.5f);
-				// Center cross so something is obvious even if box is tiny.
 				const float mx = 0.5f * (minX + maxX);
 				const float my = 0.5f * (minY + maxY);
 				dl->AddLine(ImVec2(mx - 6.f, my), ImVec2(mx + 6.f, my), col, 2.f);
@@ -220,16 +232,23 @@ public:
 			}
 		}
 		lastDrawn_ = drawn;
+		lastW2sOk_ = w2sOk;
+		lastW2sFail_ = w2sFail;
+		lastRejected_ = rejected;
+		lastCandidates_ = candidates;
 
 		static int cool = 0;
 		if (cool-- <= 0) {
 			cool = 120;
-			SFC_LOG("ESP draw boxes=%d fail=%d scan=%d", drawn, w2sFail, lastScan_);
+			EspCamInfo cam{};
+			GetEspCamInfo(cam);
+			SFC_LOG("ESP cand=%d w2sOk=%d w2sFail=%d reject=%d boxes=%d scan=%d fov=%.1f fovSrc=%d",
+				candidates, w2sOk, w2sFail, rejected, drawn, lastScan_, cam.fovDeg, cam.fovSource);
 		}
 
 		if (!showList_ && drawn > 0) return;
 
-		ImGui::SetNextWindowPos(ImVec2(disp.x - 280.f, 48.f), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(disp.x - 300.f, 48.f), ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.70f);
 		ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
 			ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
@@ -238,11 +257,14 @@ public:
 			flags |= ImGuiWindowFlags_NoInputs;
 
 		if (ImGui::Begin("##SFC_ESP", nullptr, flags)) {
-			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "ESP ON  boxes:%d  scan:%d", drawn, lastScan_);
+			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f),
+				"ESP  boxes:%d  scan:%d", drawn, lastScan_);
+			ImGui::TextDisabled("W2S ok:%d fail:%d  offscreen:%d  cand:%d",
+				w2sOk, w2sFail, rejected, candidates);
 			if (drawn == 0 && lastScan_ == 0)
 				ImGui::TextDisabled("No targets in scan");
 			else if (drawn == 0 && lastScan_ > 0)
-				ImGui::TextDisabled("Scan OK — W2S still failing (%d)", w2sFail);
+				ImGui::TextDisabled("Behind cam / W2S fail — not geometry occlusion");
 			if (showList_) {
 				int shown = 0;
 				for (const auto& m : markers) {
@@ -298,6 +320,10 @@ private:
 	float accumMs_ = 0.f;
 	int lastScan_ = 0;
 	int lastDrawn_ = 0;
+	int lastW2sOk_ = 0;
+	int lastW2sFail_ = 0;
+	int lastRejected_ = 0;
+	int lastCandidates_ = 0;
 };
 
 std::unique_ptr<IFeature> CreateEspFeature()

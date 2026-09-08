@@ -57,7 +57,7 @@ void MainMenu::Draw()
 	ImVec4 accent = Theme::Accent();
 	ImGui::TextColored(accent, "SKY'S FALLOUT CHEATS");
 	ImGui::SameLine();
-	ImGui::TextDisabled("  Utility Console // playable-v17i");
+	ImGui::TextDisabled("  Utility Console // playable-v17j");
 	{
 		const auto& snap = GameState::Get().Snapshot();
 		if (snap.valid && snap.healthStatus == ReadStatus::Valid) {
