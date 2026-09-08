@@ -503,7 +503,7 @@ void ScanCellObjects(void* player, float maxDist, bool npcs, bool loot, bool doo
 
 	int depth = static_cast<int>(std::ceil(maxDist / 4096.f));
 	if (depth < 1) depth = 1;
-	if (depth > 3) depth = 3; // enough for loaded grids; unloaded Lookup returns null
+	if (depth > 5) depth = 5; // loaded uGrids neighborhood; unloaded Lookup returns null
 
 	for (int dy = -depth; dy <= depth; ++dy) {
 		for (int dx = -depth; dx <= depth; ++dx) {

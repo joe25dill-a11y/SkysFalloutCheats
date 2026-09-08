@@ -7,31 +7,35 @@
 #include "imgui.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 
 namespace sfc {
 namespace {
 
-// Bethesda units: 128 u = 6 ft
-float DistFeet(float units) { return units * (6.f / 128.f); }
+constexpr float kUnitsPerFoot = 128.f / 6.f;
 
-ImU32 ColorForKind(std::uint8_t kind)
+float DistFeet(float units) { return units / kUnitsPerFoot; }
+float FeetToUnits(float ft) { return ft * kUnitsPerFoot; }
+
+ImU32 ColorForKind(std::uint8_t kind, int alpha = 255)
 {
+	alpha = (std::max)(40, (std::min)(255, alpha));
 	switch (kind) {
-	case 0: return IM_COL32(255, 90, 70, 255);   // NPC / enemy — red-orange
-	case 2: return IM_COL32(90, 170, 255, 255);  // door — blue
-	case 3: return IM_COL32(255, 210, 80, 255);  // container — gold
-	default: return IM_COL32(90, 255, 140, 255); // ground loot — green
+	case 0: return IM_COL32(255, 96, 72, alpha);   // NPC
+	case 2: return IM_COL32(96, 176, 255, alpha);  // door
+	case 3: return IM_COL32(255, 208, 72, alpha);  // container
+	default: return IM_COL32(96, 255, 140, alpha); // loot
 	}
 }
 
 void BoxExtentsForKind(std::uint8_t kind, float& halfW, float& halfH, float& halfD)
 {
 	switch (kind) {
-	case 0: halfW = 22.f; halfH = 48.f; halfD = 22.f; break;  // NPC
-	case 2: halfW = 35.f; halfH = 55.f; halfD = 12.f; break;  // door
-	case 3: halfW = 20.f; halfH = 18.f; halfD = 20.f; break;  // container
-	default: halfW = 14.f; halfH = 12.f; halfD = 14.f; break; // loot
+	case 0: halfW = 24.f; halfH = 52.f; halfD = 24.f; break;  // NPC
+	case 2: halfW = 36.f; halfH = 56.f; halfD = 14.f; break;  // door
+	case 3: halfW = 22.f; halfH = 20.f; halfD = 22.f; break;  // container
+	default: halfW = 16.f; halfH = 14.f; halfD = 16.f; break; // loot
 	}
 }
 
@@ -54,6 +58,55 @@ bool KindWanted(std::uint8_t kind, bool npcs, bool loot, bool containers, bool d
 	case 3: return containers || loot;
 	default: return false;
 	}
+}
+
+const char* DisplayName(const NearbyMarker& m)
+{
+	if (m.name.empty() || m.name == "?" || m.name == "???")
+		return TagForKind(m.kind);
+	return m.name.c_str();
+}
+
+int AlphaForDistance(float feet)
+{
+	if (feet < 250.f) return 255;
+	if (feet < 800.f) return 220;
+	if (feet < 2000.f) return 185;
+	return 150;
+}
+
+void EnforceMinBox(float& minX, float& minY, float& maxX, float& maxY, float minSize)
+{
+	float w = maxX - minX;
+	float h = maxY - minY;
+	const float cx = 0.5f * (minX + maxX);
+	const float cy = 0.5f * (minY + maxY);
+	if (w < minSize) {
+		minX = cx - minSize * 0.5f;
+		maxX = cx + minSize * 0.5f;
+	}
+	if (h < minSize) {
+		minY = cy - minSize * 0.5f;
+		maxY = cy + minSize * 0.5f;
+	}
+}
+
+void DrawCornerBox(ImDrawList* dl, float minX, float minY, float maxX, float maxY, ImU32 col, float thick)
+{
+	const float w = maxX - minX;
+	const float h = maxY - minY;
+	float arm = (std::min)(w, h) * 0.28f;
+	if (arm < 6.f) arm = 6.f;
+	if (arm > 18.f) arm = 18.f;
+
+	auto corner = [&](float x0, float y0, float dx, float dy) {
+		dl->AddLine(ImVec2(x0, y0), ImVec2(x0 + dx, y0), col, thick);
+		dl->AddLine(ImVec2(x0, y0), ImVec2(x0, y0 + dy), col, thick);
+	};
+	corner(minX, minY, arm, arm);
+	corner(maxX, minY, -arm, arm);
+	corner(minX, maxY, arm, -arm);
+	corner(maxX, maxY, -arm, -arm);
 }
 
 } // namespace
@@ -85,20 +138,13 @@ public:
 			showDoors_);
 
 		lastScan_ = static_cast<int>(GameState::Get().Snapshot().nearby.size());
-		static int cool = 0;
-		if (cool-- <= 0) {
-			cool = 20;
-			SFC_LOG("ESP scan markers=%d enabled=%d", lastScan_, enabled_ ? 1 : 0);
-		}
 	}
 
 	void DrawMenu() override
 	{
 		auto& perf = Config::Get().Data().performance;
 		ImGui::SeparatorText("Overlay");
-		ImGui::TextWrapped(
-			"Boxes use live FOV + 8-corner world projection. Buildings do not hide overlays. "
-			"Heal/Revive → NPCs tab → Scan area.");
+		ImGui::TextWrapped("World boxes for NPCs, loot, doors, and containers. Heal/Revive → NPCs tab.");
 		if (ImGui::Checkbox("Enable ESP##esp_enable", &enabled_)) {
 			Config::Get().Data().performance.espEnabled = enabled_;
 			Config::Get().MarkDirty();
@@ -108,33 +154,31 @@ public:
 				showLoot_ = true;
 				showContainers_ = true;
 				showList_ = true;
+				showLabels_ = true;
 			}
 		}
 		ImGui::Checkbox("Show side list##esp_list", &showList_);
 		ImGui::Checkbox("Draw world boxes##esp_boxes", &drawBoxes_);
+		ImGui::Checkbox("Draw labels##esp_labels", &showLabels_);
+		ImGui::Checkbox("Corner style##esp_corners", &cornerStyle_);
 
 		ImGui::SeparatorText("What to show");
 		ImGui::Checkbox("NPCs / enemies##esp_npc", &showNpcs_);
-		ImGui::Checkbox("Doors / places you can enter##esp_doors", &showDoors_);
-		ImGui::Checkbox("Loot you can pick up##esp_loot", &showLoot_);
+		ImGui::Checkbox("Doors##esp_doors", &showDoors_);
+		ImGui::Checkbox("Ground loot##esp_loot", &showLoot_);
 		ImGui::Checkbox("Containers / chests##esp_containers", &showContainers_);
 
 		ImGui::SeparatorText("Limits");
 		bool dirty = false;
-		// UI in feet; stored config is still game units.
-		float rangeFt = perf.espMaxDistance * (6.f / 128.f);
-		if (ImGui::SliderFloat("Max range (feet)##esp_dist_ft", &rangeFt, 100.f, 2000.f, "%.0f ft")) {
-			perf.espMaxDistance = rangeFt * (128.f / 6.f);
+		float rangeFt = DistFeet(perf.espMaxDistance);
+		if (ImGui::SliderFloat("Max range##esp_dist_ft", &rangeFt, 100.f, 5000.f, "%.0f ft")) {
+			perf.espMaxDistance = FeetToUnits(rangeFt);
 			dirty = true;
 		}
-		ImGui::TextDisabled("%.0f game units  |  loot scans nearby loaded cells (not the whole map)",
-			perf.espMaxDistance);
+		ImGui::TextDisabled("Loaded cells only — far unloaded desert will not appear.");
 		dirty |= ImGui::SliderInt("Max markers##esp_max", &perf.maxEspMarkers, 32, 512);
 		dirty |= ImGui::SliderInt("Scan interval (ms)##esp_scan", &perf.espScanMs, 100, 2000);
 		if (dirty) Config::Get().MarkDirty();
-		ImGui::TextWrapped(
-			"Shows containers/loot/doors in your cell and neighboring loaded cells within range. "
-			"The game must have the cell loaded — empty desert far away will not ESP until you get closer.");
 
 		if (ImGui::Button("Scan now##esp_scan_btn")) {
 			GameState::Get().ScanNearby(
@@ -146,18 +190,9 @@ public:
 			lastScan_ = static_cast<int>(GameState::Get().Snapshot().nearby.size());
 		}
 		ImGui::SameLine();
-		ImGui::Text("Scan:%d  W2S ok:%d fail:%d  reject:%d  boxes:%d",
-			lastScan_, lastW2sOk_, lastW2sFail_, lastRejected_, lastDrawn_);
-		EspCamInfo cam{};
-		if (GetEspCamInfo(cam))
-			ImGui::TextDisabled("Cam fov=%.1f° src=%d fovSrc=%d  (ALT should change fov)",
-				cam.fovDeg, cam.source, cam.fovSource);
-		if (lastScan_ == 0 && enabled_)
-			ImGui::TextDisabled("Nothing in range — walk near NPCs/doors and Scan.");
-		else if (lastScan_ > 0 && lastDrawn_ == 0 && drawBoxes_)
-			ImGui::TextDisabled("Scan OK — W2S failing or all behind camera.");
+		ImGui::Text("scan %d  |  boxes %d  |  miss %d", lastScan_, lastDrawn_, lastW2sFail_ + lastRejected_);
 
-		ImGui::SeparatorText("Nearby right now");
+		ImGui::SeparatorText("Nearby");
 		const auto& markers = GameState::Get().Snapshot().nearby;
 		ImGui::BeginChild("##esp_menu_list", ImVec2(0, 220), true);
 		if (markers.empty()) {
@@ -167,12 +202,11 @@ public:
 			for (const auto& m : markers) {
 				if (!KindWanted(m.kind, showNpcs_, showLoot_, showContainers_, showDoors_)) continue;
 				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ColorForKind(m.kind)),
-					"%-5s %4.0fft  %s", TagForKind(m.kind), DistFeet(m.distance), m.name.c_str());
-				if (++shown >= 24) break;
+					"%-5s %4.0fft  %s", TagForKind(m.kind), DistFeet(m.distance), DisplayName(m));
+				if (++shown >= 28) break;
 			}
 		}
 		ImGui::EndChild();
-		ImGui::TextDisabled("Heal / Revive / Kill → NPCs tab (uses this same scan).");
 	}
 
 	void DrawHud() override
@@ -181,7 +215,6 @@ public:
 
 		const auto& markers = GameState::Get().Snapshot().nearby;
 		lastScan_ = static_cast<int>(markers.size());
-		// Foreground so boxes sit above the game HUD / our other windows.
 		ImDrawList* dl = ImGui::GetForegroundDrawList();
 		const ImVec2 disp = ImGui::GetIO().DisplaySize;
 
@@ -200,44 +233,67 @@ public:
 				float minX, minY, maxX, maxY;
 				bool got = WorldBoxToScreenRect(m.x, m.y, m.z, halfW, halfH, halfD, minX, minY, maxX, maxY);
 				if (!got) {
-					// Center point probe so we can separate "all corners failed" vs box math.
 					ScreenPos sp = WorldToScreen(m.x, m.y, m.z + halfH);
 					if (!sp.ok) {
 						++w2sFail;
 						continue;
 					}
 					++w2sOk;
-					minX = sp.x - 18.f; maxX = sp.x + 18.f;
-					minY = sp.y - 48.f; maxY = sp.y + 8.f;
+					const float s = (m.kind == 0) ? 22.f : 14.f;
+					minX = sp.x - s; maxX = sp.x + s;
+					minY = sp.y - s * 1.6f; maxY = sp.y + s * 0.4f;
 				} else {
 					++w2sOk;
 				}
 
-				// Fully off-screen → count as rejected (still projected). Partial stays.
 				if (maxX < 2.f || maxY < 2.f || minX > disp.x - 2.f || minY > disp.y - 2.f) {
 					++rejected;
 					continue;
 				}
+
+				EnforceMinBox(minX, minY, maxX, maxY, m.kind == 0 ? 18.f : 12.f);
 				minX = (std::max)(0.f, minX);
 				minY = (std::max)(0.f, minY);
 				maxX = (std::min)(disp.x, maxX);
 				maxY = (std::min)(disp.y, maxY);
 
-				const ImU32 col = ColorForKind(m.kind);
-				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), IM_COL32(0, 0, 0, 220), 0.f, 0, 4.0f);
-				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 2.5f);
+				const float feet = DistFeet(m.distance);
+				const int a = AlphaForDistance(feet);
+				const ImU32 col = ColorForKind(m.kind, a);
+				const ImU32 outline = IM_COL32(0, 0, 0, (std::min)(220, a));
+
+				if (cornerStyle_) {
+					DrawCornerBox(dl, minX, minY, maxX, maxY, outline, 3.4f);
+					DrawCornerBox(dl, minX, minY, maxX, maxY, col, 2.0f);
+				} else {
+					dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), outline, 0.f, 0, 3.2f);
+					dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 1.8f);
+				}
+
 				const float mx = 0.5f * (minX + maxX);
 				const float my = 0.5f * (minY + maxY);
-				dl->AddLine(ImVec2(mx - 6.f, my), ImVec2(mx + 6.f, my), col, 2.f);
-				dl->AddLine(ImVec2(mx, my - 6.f), ImVec2(mx, my + 6.f), col, 2.f);
+				dl->AddLine(ImVec2(mx - 4.f, my), ImVec2(mx + 4.f, my), col, 1.5f);
+				dl->AddLine(ImVec2(mx, my - 4.f), ImVec2(mx, my + 4.f), col, 1.5f);
 
-				char label[96];
-				std::snprintf(label, sizeof(label), "%s [%.0fft]", m.name.c_str(), DistFeet(m.distance));
-				const ImVec2 ts = ImGui::CalcTextSize(label);
-				const float lx = minX;
-				const float ly = (std::max)(0.f, minY - ts.y - 3.f);
-				dl->AddRectFilled(ImVec2(lx - 3.f, ly - 1.f), ImVec2(lx + ts.x + 3.f, ly + ts.y + 1.f), IM_COL32(0, 0, 0, 200));
-				dl->AddText(ImVec2(lx, ly), col, label);
+				if (showLabels_) {
+					char label[96];
+					const char* name = DisplayName(m);
+					// Keep labels short so they don't smear across the sky.
+					if (std::strlen(name) > 22)
+						std::snprintf(label, sizeof(label), "%.18s… %.0fft", name, feet);
+					else
+						std::snprintf(label, sizeof(label), "%s  %.0fft", name, feet);
+
+					const ImVec2 ts = ImGui::CalcTextSize(label);
+					float lx = minX;
+					float ly = minY - ts.y - 4.f;
+					if (ly < 2.f) ly = maxY + 3.f;
+					lx = (std::max)(2.f, (std::min)(disp.x - ts.x - 2.f, lx));
+					ly = (std::max)(2.f, (std::min)(disp.y - ts.y - 2.f, ly));
+					dl->AddRectFilled(ImVec2(lx - 3.f, ly - 1.f), ImVec2(lx + ts.x + 3.f, ly + ts.y + 1.f),
+						IM_COL32(0, 0, 0, (std::min)(200, a)));
+					dl->AddText(ImVec2(lx, ly), col, label);
+				}
 				++drawn;
 			}
 		}
@@ -249,17 +305,14 @@ public:
 
 		static int cool = 0;
 		if (cool-- <= 0) {
-			cool = 120;
-			EspCamInfo cam{};
-			GetEspCamInfo(cam);
-			SFC_LOG("ESP cand=%d w2sOk=%d w2sFail=%d reject=%d boxes=%d scan=%d fov=%.1f fovSrc=%d",
-				candidates, w2sOk, w2sFail, rejected, drawn, lastScan_, cam.fovDeg, cam.fovSource);
+			cool = 180;
+			SFC_LOG("ESP boxes=%d scan=%d fail=%d reject=%d", drawn, lastScan_, w2sFail, rejected);
 		}
 
 		if (!showList_ && drawn > 0) return;
 
-		ImGui::SetNextWindowPos(ImVec2(disp.x - 300.f, 48.f), ImGuiCond_Always);
-		ImGui::SetNextWindowBgAlpha(0.70f);
+		ImGui::SetNextWindowPos(ImVec2(disp.x - 268.f, 44.f), ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.62f);
 		ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
 			ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
 			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
@@ -267,20 +320,18 @@ public:
 			flags |= ImGuiWindowFlags_NoInputs;
 
 		if (ImGui::Begin("##SFC_ESP", nullptr, flags)) {
-			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f),
-				"ESP  boxes:%d  scan:%d", drawn, lastScan_);
-			ImGui::TextDisabled("W2S ok:%d fail:%d  offscreen:%d  cand:%d",
-				w2sOk, w2sFail, rejected, candidates);
+			ImGui::TextColored(ImVec4(1.f, 0.78f, 0.25f, 1.f), "ESP  %d / %d", drawn, lastScan_);
 			if (drawn == 0 && lastScan_ == 0)
-				ImGui::TextDisabled("No targets in scan");
+				ImGui::TextDisabled("No targets in range");
 			else if (drawn == 0 && lastScan_ > 0)
-				ImGui::TextDisabled("Behind cam / W2S fail — not geometry occlusion");
+				ImGui::TextDisabled("Projected off-view / behind camera");
 			if (showList_) {
 				int shown = 0;
 				for (const auto& m : markers) {
 					if (!KindWanted(m.kind, showNpcs_, showLoot_, showContainers_, showDoors_)) continue;
-					ImGui::Text("%-5s %4.0fft  %s", TagForKind(m.kind), DistFeet(m.distance), m.name.c_str());
-					if (++shown >= 14) break;
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ColorForKind(m.kind)),
+						"%-5s %4.0fft  %s", TagForKind(m.kind), DistFeet(m.distance), DisplayName(m));
+					if (++shown >= 12) break;
 				}
 			}
 		}
@@ -296,6 +347,7 @@ public:
 	{
 		return {
 			{"enabled", enabled_}, {"showList", showList_}, {"drawBoxes", drawBoxes_},
+			{"showLabels", showLabels_}, {"cornerStyle", cornerStyle_},
 			{"showNpcs", showNpcs_}, {"showLoot", showLoot_},
 			{"showContainers", showContainers_}, {"showDoors", showDoors_}
 		};
@@ -307,6 +359,8 @@ public:
 		enabled_ = j.value("enabled", enabled_);
 		showList_ = j.value("showList", showList_);
 		drawBoxes_ = j.value("drawBoxes", drawBoxes_);
+		showLabels_ = j.value("showLabels", showLabels_);
+		cornerStyle_ = j.value("cornerStyle", cornerStyle_);
 		showNpcs_ = j.value("showNpcs", showNpcs_);
 		showLoot_ = j.value("showLoot", showLoot_);
 		showContainers_ = j.value("showContainers", showContainers_);
@@ -323,6 +377,8 @@ private:
 	bool enabled_ = false;
 	bool showList_ = true;
 	bool drawBoxes_ = true;
+	bool showLabels_ = true;
+	bool cornerStyle_ = true;
 	bool showNpcs_ = true;
 	bool showLoot_ = true;
 	bool showContainers_ = true;

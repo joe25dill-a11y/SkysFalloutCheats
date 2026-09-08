@@ -37,8 +37,8 @@ struct HudSettings {
 
 struct PerformanceSettings {
 	int espScanMs = 250;
-	int maxEspMarkers = 256;
-	float espMaxDistance = 42667.f; // ≈ 2000 feet (128 units = 6 ft)
+	int maxEspMarkers = 384;
+	float espMaxDistance = 106667.f; // ≈ 5000 feet (128 units = 6 ft)
 	bool eventDrivenPreferred = true;
 	bool espEnabled = false;
 };
