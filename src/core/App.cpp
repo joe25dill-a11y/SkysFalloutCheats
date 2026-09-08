@@ -47,7 +47,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s playable-v17k (world NiCamera W2S + sanity fallback)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v17l (kill sky-box cam matrix; player-rot W2S)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);

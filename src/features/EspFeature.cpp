@@ -121,10 +121,16 @@ public:
 
 		ImGui::SeparatorText("Limits");
 		bool dirty = false;
-		dirty |= ImGui::SliderFloat("Max distance##esp_dist", &perf.espMaxDistance, 500.f, 12000.f, "%.0f");
-		dirty |= ImGui::SliderInt("Max markers##esp_max", &perf.maxEspMarkers, 8, 128);
+		// Slider is GAME UNITS (not feet). 128 units = 6 ft → 8000 u ≈ 375 ft.
+		dirty |= ImGui::SliderFloat("Max range (game units)##esp_dist", &perf.espMaxDistance, 500.f, 20000.f, "%.0f");
+		ImGui::TextDisabled("≈ %.0f ft   (128 units = 6 ft — 8000 is NOT 8000 feet)",
+			perf.espMaxDistance * (6.f / 128.f));
+		dirty |= ImGui::SliderInt("Max markers##esp_max", &perf.maxEspMarkers, 8, 256);
 		dirty |= ImGui::SliderInt("Scan interval (ms)##esp_scan", &perf.espScanMs, 100, 2000);
 		if (dirty) Config::Get().MarkDirty();
+		ImGui::TextWrapped(
+			"Loot/doors only scan your CURRENT cell. NPCs come from loaded actor lists. "
+			"You will not see every container across the whole map even at max range.");
 
 		if (ImGui::Button("Scan now##esp_scan_btn")) {
 			GameState::Get().ScanNearby(
