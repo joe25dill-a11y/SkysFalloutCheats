@@ -97,8 +97,8 @@ public:
 		auto& perf = Config::Get().Data().performance;
 		ImGui::SeparatorText("Overlay");
 		ImGui::TextWrapped(
-			"Side list works with the menu open. World boxes need a valid camera (W2S). "
-			"For Heal/Revive use NPCs tab → Scan area.");
+			"Boxes = in front of you. Triangles on the screen edge = behind you / through walls / off-angle. "
+			"Heal/Revive → NPCs tab → Scan area.");
 		if (ImGui::Checkbox("Enable ESP##esp_enable", &enabled_)) {
 			Config::Get().Data().performance.espEnabled = enabled_;
 			Config::Get().MarkDirty();
@@ -171,63 +171,85 @@ public:
 		const ImVec2 disp = ImGui::GetIO().DisplaySize;
 
 		int drawn = 0;
-		int w2sFail = 0;
+		int edgeDrawn = 0;
 		if (drawBoxes_) {
 			for (const auto& m : markers) {
 				if (!KindWanted(m.kind, showNpcs_, showLoot_, showContainers_, showDoors_)) continue;
 				float halfW = 0, halfH = 0, halfD = 0;
 				BoxExtentsForKind(m.kind, halfW, halfH, halfD);
 
+				const ImU32 col = ColorForKind(m.kind);
 				float minX, minY, maxX, maxY;
 				bool got = WorldBoxToScreenRect(m.x, m.y, m.z, halfW, halfH, halfD, minX, minY, maxX, maxY);
-				if (!got) {
-					ScreenPos sp = WorldToScreen(m.x, m.y, m.z + halfH);
-					if (!sp.ok) {
-						++w2sFail;
-						continue;
-					}
-					minX = sp.x - 18.f; maxX = sp.x + 18.f;
-					minY = sp.y - 48.f; maxY = sp.y + 8.f;
+				bool onScreenBox = false;
+				if (got) {
+					onScreenBox = !(maxX < 2.f || maxY < 2.f || minX > disp.x - 2.f || minY > disp.y - 2.f);
 				}
 
-				// Clamp instead of skip — partial on-screen still draws.
-				if (maxX < 2.f || maxY < 2.f || minX > disp.x - 2.f || minY > disp.y - 2.f) {
-					++w2sFail;
+				if (onScreenBox) {
+					minX = (std::max)(0.f, minX);
+					minY = (std::max)(0.f, minY);
+					maxX = (std::min)(disp.x, maxX);
+					maxY = (std::min)(disp.y, maxY);
+
+					dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), IM_COL32(0, 0, 0, 220), 0.f, 0, 4.0f);
+					dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 2.5f);
+					const float mx = 0.5f * (minX + maxX);
+					const float my = 0.5f * (minY + maxY);
+					dl->AddLine(ImVec2(mx - 6.f, my), ImVec2(mx + 6.f, my), col, 2.f);
+					dl->AddLine(ImVec2(mx, my - 6.f), ImVec2(mx, my + 6.f), col, 2.f);
+
+					char label[96];
+					std::snprintf(label, sizeof(label), "%s [%.0fft]", m.name.c_str(), DistFeet(m.distance));
+					const ImVec2 ts = ImGui::CalcTextSize(label);
+					const float lx = minX;
+					const float ly = (std::max)(0.f, minY - ts.y - 3.f);
+					dl->AddRectFilled(ImVec2(lx - 3.f, ly - 1.f), ImVec2(lx + ts.x + 3.f, ly + ts.y + 1.f), IM_COL32(0, 0, 0, 200));
+					dl->AddText(ImVec2(lx, ly), col, label);
+					++drawn;
 					continue;
 				}
-				minX = (std::max)(0.f, minX);
-				minY = (std::max)(0.f, minY);
-				maxX = (std::min)(disp.x, maxX);
-				maxY = (std::min)(disp.y, maxY);
 
-				const ImU32 col = ColorForKind(m.kind);
-				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), IM_COL32(0, 0, 0, 220), 0.f, 0, 4.0f);
-				dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 2.5f);
-				// Center cross so something is obvious even if box is tiny.
-				const float mx = 0.5f * (minX + maxX);
-				const float my = 0.5f * (minY + maxY);
-				dl->AddLine(ImVec2(mx - 6.f, my), ImVec2(mx + 6.f, my), col, 2.f);
-				dl->AddLine(ImVec2(mx, my - 6.f), ImVec2(mx, my + 6.f), col, 2.f);
-
-				char label[96];
-				std::snprintf(label, sizeof(label), "%s [%.0fft]", m.name.c_str(), DistFeet(m.distance));
-				const ImVec2 ts = ImGui::CalcTextSize(label);
-				const float lx = minX;
-				const float ly = (std::max)(0.f, minY - ts.y - 3.f);
-				dl->AddRectFilled(ImVec2(lx - 3.f, ly - 1.f), ImVec2(lx + ts.x + 3.f, ly + ts.y + 1.f), IM_COL32(0, 0, 0, 200));
-				dl->AddText(ImVec2(lx, ly), col, label);
-				++drawn;
+				// Through walls / behind you / off to the side: edge ping (not dropped).
+				float sx = 0.f, sy = 0.f;
+				bool onScreen = false;
+				if (!ProjectEspPoint(m.x, m.y, m.z + halfH, sx, sy, onScreen))
+					continue;
+				if (onScreen) {
+					minX = sx - 18.f; maxX = sx + 18.f;
+					minY = sy - 48.f; maxY = sy + 8.f;
+					dl->AddRect(ImVec2(minX, minY), ImVec2(maxX, maxY), col, 0.f, 0, 2.0f);
+					++drawn;
+				} else {
+					const float s = 10.f;
+					dl->AddTriangleFilled(
+						ImVec2(sx, sy - s),
+						ImVec2(sx - s, sy + s * 0.6f),
+						ImVec2(sx + s, sy + s * 0.6f),
+						col);
+					dl->AddCircle(ImVec2(sx, sy), 3.f, IM_COL32(0, 0, 0, 220), 8, 2.f);
+					char label[96];
+					std::snprintf(label, sizeof(label), "%s %.0fft", TagForKind(m.kind), DistFeet(m.distance));
+					const ImVec2 ts = ImGui::CalcTextSize(label);
+					float lx = sx - ts.x * 0.5f;
+					float ly = sy + 12.f;
+					lx = (std::max)(2.f, (std::min)(disp.x - ts.x - 2.f, lx));
+					ly = (std::max)(2.f, (std::min)(disp.y - ts.y - 2.f, ly));
+					dl->AddRectFilled(ImVec2(lx - 2.f, ly - 1.f), ImVec2(lx + ts.x + 2.f, ly + ts.y + 1.f), IM_COL32(0, 0, 0, 190));
+					dl->AddText(ImVec2(lx, ly), col, label);
+					++edgeDrawn;
+				}
 			}
 		}
-		lastDrawn_ = drawn;
+		lastDrawn_ = drawn + edgeDrawn;
 
 		static int cool = 0;
 		if (cool-- <= 0) {
 			cool = 120;
-			SFC_LOG("ESP draw boxes=%d fail=%d scan=%d", drawn, w2sFail, lastScan_);
+			SFC_LOG("ESP draw boxes=%d edge=%d scan=%d", drawn, edgeDrawn, lastScan_);
 		}
 
-		if (!showList_ && drawn > 0) return;
+		if (!showList_ && (drawn + edgeDrawn) > 0) return;
 
 		ImGui::SetNextWindowPos(ImVec2(disp.x - 280.f, 48.f), ImGuiCond_Always);
 		ImGui::SetNextWindowBgAlpha(0.70f);
@@ -238,11 +260,12 @@ public:
 			flags |= ImGuiWindowFlags_NoInputs;
 
 		if (ImGui::Begin("##SFC_ESP", nullptr, flags)) {
-			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "ESP ON  boxes:%d  scan:%d", drawn, lastScan_);
-			if (drawn == 0 && lastScan_ == 0)
+			ImGui::TextColored(ImVec4(1.f, 0.75f, 0.2f, 1.f), "ESP ON  boxes:%d  edge:%d  scan:%d",
+				drawn, edgeDrawn, lastScan_);
+			if (drawn + edgeDrawn == 0 && lastScan_ == 0)
 				ImGui::TextDisabled("No targets in scan");
-			else if (drawn == 0 && lastScan_ > 0)
-				ImGui::TextDisabled("Scan OK — W2S still failing (%d)", w2sFail);
+			else if (drawn + edgeDrawn == 0 && lastScan_ > 0)
+				ImGui::TextDisabled("Scan OK — projection failed");
 			if (showList_) {
 				int shown = 0;
 				for (const auto& m : markers) {

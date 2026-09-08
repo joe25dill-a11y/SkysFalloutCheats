@@ -10,15 +10,13 @@ namespace {
 
 constexpr std::uintptr_t kPreferredBase = 0x00400000;
 constexpr std::uintptr_t kThePlayerAbs = 0x011DEA3C;
-constexpr std::uintptr_t kCamera1stAbs = 0x011E07D0;
-constexpr std::uintptr_t kCamera3rdAbs = 0x011E07D4;
 
 constexpr std::ptrdiff_t kOff_RotX = 0x024;
 constexpr std::ptrdiff_t kOff_PosX = 0x030;
-constexpr std::ptrdiff_t kOff_WorldTranslate = 0x08C;
 
 constexpr float kPi = 3.14159265f;
 constexpr float kDeg = 180.f / kPi;
+constexpr float kNearZ = 4.f;
 
 std::uintptr_t Rel(std::uintptr_t absAddr)
 {
@@ -66,26 +64,16 @@ struct CamFrame {
 	float eyeX = 0, eyeY = 0, eyeZ = 0;
 	float yaw = 0;
 	float pitch = 0;
-	float fovY = 82.f * kPi / 180.f;
+	float fovY = 75.f * kPi / 180.f;
 	bool hasLook = false;
 	float forward[3]{};
 	float right[3]{};
 	float up[3]{};
+	bool hasD3D = false;
+	float vp[16]{}; // column-major view*proj
 };
 
 CamFrame g_cam{};
-
-void* FindCameraNode()
-{
-	__try {
-		void** n3 = reinterpret_cast<void**>(Rel(kCamera3rdAbs));
-		void** n1 = reinterpret_cast<void**>(Rel(kCamera1stAbs));
-		if (n3 && ValidUserPtr(*n3)) return *n3;
-		if (n1 && ValidUserPtr(*n1)) return *n1;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER) {}
-	return nullptr;
-}
 
 bool ReadPlayerPose(float* px, float* py, float* pz, float* rx, float* ry, float* rz)
 {
@@ -107,21 +95,7 @@ bool ReadPlayerPose(float* px, float* py, float* pz, float* rx, float* ry, float
 	}
 }
 
-bool ReadNodeTranslate(void* node, float* x, float* y, float* z)
-{
-	__try {
-		if (!ValidUserPtr(node)) return false;
-		const float* t = reinterpret_cast<const float*>(reinterpret_cast<char*>(node) + kOff_WorldTranslate);
-		if (!std::isfinite(t[0]) || !std::isfinite(t[1]) || !std::isfinite(t[2])) return false;
-		*x = t[0]; *y = t[1]; *z = t[2];
-		return true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER) {
-		return false;
-	}
-}
-
-// Player REFR rot: yaw=rotZ, pitch=rotX (same as v17e — that path drew boxes).
+// Player REFR rot: yaw=rotZ, pitch=rotX.
 void BasisFromPlayerRot(float yaw, float pitch, float* forward, float* right, float* up)
 {
 	const float cy = std::cosf(yaw);
@@ -143,48 +117,126 @@ void BasisFromPlayerRot(float yaw, float pitch, float* forward, float* right, fl
 	Norm3(up);
 }
 
-bool ProjectLook(const CamFrame& cam, float wx, float wy, float wz, float& sx, float& sy)
+// Row-major 4x4 multiply (D3D row-vector: v' = v * A * B).
+void MulMat4(const float* a, const float* b, float* o)
+{
+	for (int r = 0; r < 4; ++r) {
+		for (int c = 0; c < 4; ++c) {
+			o[r * 4 + c] =
+				a[r * 4 + 0] * b[0 * 4 + c] +
+				a[r * 4 + 1] * b[1 * 4 + c] +
+				a[r * 4 + 2] * b[2 * 4 + c] +
+				a[r * 4 + 3] * b[3 * 4 + c];
+		}
+	}
+}
+
+bool TryCaptureD3D(IDirect3DDevice9* device, CamFrame& cam)
+{
+	if (!device) return false;
+	D3DMATRIX view{}, proj{};
+	if (FAILED(device->GetTransform(D3DTS_VIEW, &view))) return false;
+	if (FAILED(device->GetTransform(D3DTS_PROJECTION, &proj))) return false;
+
+	// Gamebryo often leaves these identity / unused at EndScene — bail if so.
+	const float tlen = std::sqrt(view._41 * view._41 + view._42 * view._42 + view._43 * view._43);
+	const float fdiag = std::fabs(view._11) + std::fabs(view._22) + std::fabs(view._33);
+	if (tlen < 8.f && fdiag > 2.9f && fdiag < 3.1f) return false;
+
+	float v[16] = {
+		view._11, view._12, view._13, view._14,
+		view._21, view._22, view._23, view._24,
+		view._31, view._32, view._33, view._34,
+		view._41, view._42, view._43, view._44
+	};
+	float p[16] = {
+		proj._11, proj._12, proj._13, proj._14,
+		proj._21, proj._22, proj._23, proj._24,
+		proj._31, proj._32, proj._33, proj._34,
+		proj._41, proj._42, proj._43, proj._44
+	};
+	MulMat4(v, p, cam.vp);
+	cam.hasD3D = true;
+	return true;
+}
+
+bool ProjectD3D(const CamFrame& cam, float wx, float wy, float wz, float& sx, float& sy, float& wzClip)
+{
+	const float* m = cam.vp;
+	const float x = wx * m[0] + wy * m[4] + wz * m[8] + m[12];
+	const float y = wx * m[1] + wy * m[5] + wz * m[9] + m[13];
+	const float z = wx * m[2] + wy * m[6] + wz * m[10] + m[14];
+	const float w = wx * m[3] + wy * m[7] + wz * m[11] + m[15];
+	if (!std::isfinite(w) || std::fabs(w) < 1.0e-4f) return false;
+	wzClip = z / w;
+	if (wzClip < 0.f) return false;
+	const float nx = x / w;
+	const float ny = y / w;
+	sx = (nx + 1.f) * 0.5f * cam.sw;
+	sy = (1.f - (ny + 1.f) * 0.5f) * cam.sh;
+	return std::isfinite(sx) && std::isfinite(sy);
+}
+
+bool ProjectLook(const CamFrame& cam, float wx, float wy, float wz, float& sx, float& sy, float& depth)
 {
 	if (!cam.hasLook) return false;
 	const float d[3] = { wx - cam.eyeX, wy - cam.eyeY, wz - cam.eyeZ };
-	const float z = Dot3(d, cam.forward);
-	if (z < 8.f) return false;
+	depth = Dot3(d, cam.forward);
+	if (depth < kNearZ) return false;
 
 	const float x = Dot3(d, cam.right);
 	const float y = Dot3(d, cam.up);
 	const float aspect = cam.sw / (cam.sh > 1.f ? cam.sh : 1.f);
 	const float tanHalf = std::tanf(cam.fovY * 0.5f);
-	const float nx = (x / z) / (tanHalf * aspect);
-	const float ny = (y / z) / tanHalf;
+	const float nx = (x / depth) / (tanHalf * aspect);
+	const float ny = (y / depth) / tanHalf;
 
 	sx = (nx + 1.f) * 0.5f * cam.sw;
 	sy = (1.f - (ny + 1.f) * 0.5f) * cam.sh;
 	return std::isfinite(sx) && std::isfinite(sy);
 }
 
-bool ProjectAngular(const CamFrame& cam, float wx, float wy, float wz, float& sx, float& sy)
+void ClampToScreenEdge(float& sx, float& sy, float sw, float sh)
+{
+	const float cx = sw * 0.5f;
+	const float cy = sh * 0.5f;
+	float dx = sx - cx;
+	float dy = sy - cy;
+	if (std::fabs(dx) < 1.f && std::fabs(dy) < 1.f) {
+		sx = sw - 18.f;
+		sy = cy;
+		return;
+	}
+	const float margin = 14.f;
+	const float maxX = cx - margin;
+	const float maxY = cy - margin;
+	const float ax = std::fabs(dx) / (maxX > 1.f ? maxX : 1.f);
+	const float ay = std::fabs(dy) / (maxY > 1.f ? maxY : 1.f);
+	const float s = (std::max)(ax, ay);
+	if (s > 1.f) {
+		dx /= s;
+		dy /= s;
+	}
+	sx = cx + dx;
+	sy = cy + dy;
+	sx = (std::max)(margin, (std::min)(sw - margin, sx));
+	sy = (std::max)(margin, (std::min)(sh - margin, sy));
+}
+
+// Behind / extreme off-angle: place a ping from yaw only.
+void EdgeFromYaw(const CamFrame& cam, float wx, float wy, float& sx, float& sy)
 {
 	const float dx = wx - cam.eyeX;
 	const float dy = wy - cam.eyeY;
-	const float dz = wz - cam.eyeZ;
-	const float distXY = std::sqrt(dx * dx + dy * dy);
-	if (distXY < 4.f && std::fabs(dz) < 4.f) return false;
-
 	const float yawTo = std::atan2(dx, dy);
-	// Match BasisFromPlayerRot: viewPitch = -rotX stored in cam.pitch already as view pitch
-	const float pitchTo = std::atan2(dz, (std::max)(distXY, 1.f));
 	const float dyaw = NormAngle(yawTo - cam.yaw);
-	const float dpitch = NormAngle(pitchTo - cam.pitch);
-
-	if (std::fabs(dyaw) > (120.f / kDeg)) return false;
-
-	const float aspect = cam.sw / (cam.sh > 1.f ? cam.sh : 1.f);
-	const float halfFovY = cam.fovY * 0.5f;
-	const float halfFovX = halfFovY * aspect;
-
-	sx = cam.sw * 0.5f + (dyaw / halfFovX) * (cam.sw * 0.5f);
-	sy = cam.sh * 0.5f - (dpitch / halfFovY) * (cam.sh * 0.5f);
-	return std::isfinite(sx) && std::isfinite(sy);
+	// Map ±180° around the border (left/right/behind → edges).
+	const float t = dyaw / kPi; // -1 .. 1
+	sx = cam.sw * 0.5f + t * (cam.sw * 0.5f - 16.f);
+	sy = cam.sh * 0.5f;
+	if (std::fabs(dyaw) > (90.f / kDeg))
+		sy = cam.sh * 0.78f; // behind → lower edge cue
+	ClampToScreenEdge(sx, sy, cam.sw, cam.sh);
 }
 
 } // namespace
@@ -202,43 +254,43 @@ void CaptureCameraForFrame(IDirect3DDevice9* device)
 	}
 	g_cam.sw = sw;
 	g_cam.sh = sh;
-	g_cam.fovY = 82.f * kPi / 180.f;
+	g_cam.fovY = 75.f * kPi / 180.f;
 
 	float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
 	if (!ReadPlayerPose(&px, &py, &pz, &rx, &ry, &rz)) return;
 
 	g_cam.yaw = rz;
-	g_cam.pitch = -rx; // view pitch: looking up = positive
+	g_cam.pitch = -rx;
 
-	// Eye: camera node translate only (position). Do NOT use node rotation — it was -80° garbage.
+	// Keep eye + look from the SAME source (player). Mixing cam-node eye with
+	// player rot made 3rd-person targets fail W2S until you walked into view.
 	g_cam.eyeX = px;
 	g_cam.eyeY = py;
-	g_cam.eyeZ = pz + 120.f;
-	if (void* node = FindCameraNode()) {
-		float cx, cy, cz;
-		if (ReadNodeTranslate(node, &cx, &cy, &cz)) {
-			g_cam.eyeX = cx;
-			g_cam.eyeY = cy;
-			g_cam.eyeZ = cz;
-			g_cam.source = 6;
-		} else {
-			g_cam.source = 5;
-		}
-	} else {
-		g_cam.source = 5;
-	}
+	g_cam.eyeZ = pz + 128.f;
+	g_cam.source = 7;
 
 	BasisFromPlayerRot(rz, rx, g_cam.forward, g_cam.right, g_cam.up);
 	g_cam.hasLook = true;
+
+	if (TryCaptureD3D(device, g_cam))
+		g_cam.source = 8;
+
 	g_cam.valid = true;
 
 	static int cool = 0;
 	if ((cool++ % 300) == 0) {
-		float tsx = -1, tsy = -1;
-		const bool ok = ProjectLook(g_cam, px, py, pz + 40.f, tsx, tsy)
-			|| ProjectAngular(g_cam, px, py, pz + 40.f, tsx, tsy);
-		SFC_LOG("W2S src=%d ok=%d xy=%.0f,%.0f viewPitch=%.1f",
-			g_cam.source, ok ? 1 : 0, tsx, tsy, g_cam.pitch * kDeg);
+		float tsx = -1, tsy = -1, depth = 0;
+		const float fx = px + g_cam.forward[0] * 200.f;
+		const float fy = py + g_cam.forward[1] * 200.f;
+		const float fz = pz + 128.f + g_cam.forward[2] * 200.f;
+		bool ok = false;
+		if (g_cam.hasD3D) {
+			float zc = 0;
+			ok = ProjectD3D(g_cam, fx, fy, fz, tsx, tsy, zc);
+		}
+		if (!ok) ok = ProjectLook(g_cam, fx, fy, fz, tsx, tsy, depth);
+		SFC_LOG("W2S src=%d d3d=%d ok=%d xy=%.0f,%.0f pitch=%.1f",
+			g_cam.source, g_cam.hasD3D ? 1 : 0, ok ? 1 : 0, tsx, tsy, g_cam.pitch * kDeg);
 	}
 }
 
@@ -247,14 +299,46 @@ ScreenPos WorldToScreen(float wx, float wy, float wz)
 	ScreenPos out{};
 	if (!g_cam.valid) return out;
 	__try {
-		bool ok = ProjectLook(g_cam, wx, wy, wz, out.x, out.y);
-		if (!ok) ok = ProjectAngular(g_cam, wx, wy, wz, out.x, out.y);
+		float depth = 0.f;
+		bool ok = false;
+		if (g_cam.hasD3D) {
+			float zc = 0.f;
+			ok = ProjectD3D(g_cam, wx, wy, wz, out.x, out.y, zc);
+			if (!ok) out.behind = true;
+		}
+		if (!ok) {
+			ok = ProjectLook(g_cam, wx, wy, wz, out.x, out.y, depth);
+			if (!ok) out.behind = (depth < kNearZ);
+		}
 		out.ok = ok;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) {
 		out.ok = false;
 	}
 	return out;
+}
+
+bool ProjectEspPoint(float wx, float wy, float wz, float& sx, float& sy, bool& onScreen)
+{
+	onScreen = false;
+	if (!g_cam.valid) return false;
+
+	ScreenPos sp = WorldToScreen(wx, wy, wz);
+	if (sp.ok) {
+		sx = sp.x;
+		sy = sp.y;
+		const float m = 4.f;
+		if (sx >= m && sy >= m && sx <= g_cam.sw - m && sy <= g_cam.sh - m) {
+			onScreen = true;
+			return true;
+		}
+		ClampToScreenEdge(sx, sy, g_cam.sw, g_cam.sh);
+		return true;
+	}
+
+	// Behind camera / failed depth — still show a wallhack edge ping.
+	EdgeFromYaw(g_cam, wx, wy, sx, sy);
+	return true;
 }
 
 bool WorldBoxToScreenRect(
@@ -277,10 +361,10 @@ bool WorldBoxToScreenRect(
 	if (head.ok && feet.ok)
 		h = std::fabs(head.y - feet.y);
 	if (h < 16.f) h = 16.f;
-	if (h > 200.f) h = 200.f;
+	if (h > 220.f) h = 220.f;
 	float w = h * (halfH > 1.f ? (halfW / halfH) : 0.4f);
 	if (w < 12.f) w = 12.f;
-	if (w > 140.f) w = 140.f;
+	if (w > 160.f) w = 160.f;
 
 	outMinX = mid.x - w * 0.5f;
 	outMaxX = mid.x + w * 0.5f;
