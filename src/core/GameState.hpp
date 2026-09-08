@@ -68,6 +68,12 @@ public:
 
 	void ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, bool doors);
 
+	// Merge scan requests from ESP / GRAB / etc., then flush once per interval.
+	// Stops boxes flickering when two systems rewrite nearby with different filters.
+	void WantNearbyScan(float maxDist, int maxMarkers, bool npcs, bool loot, bool doors);
+	void FlushNearbyScan(float dt);
+	void FlushNearbyScanNow(); // immediate (Grab All / Scan now)
+
 private:
 	PlayerSnapshot snap_{};
 	float refreshAccum_ = 0.f;
@@ -78,6 +84,14 @@ private:
 	int faultStreak_ = 0;
 	int lightOkStreak_ = 0; // successful light reads before allowing weapon/process probes
 	bool readsEnabled_ = true;
+
+	float nearbyFlushAccum_ = 0.f;
+	bool nearbyWantPending_ = false;
+	float nearbyWantDist_ = 0.f;
+	int nearbyWantMarkers_ = 0;
+	bool nearbyWantNpcs_ = false;
+	bool nearbyWantLoot_ = false;
+	bool nearbyWantDoors_ = false;
 };
 
 } // namespace sfc

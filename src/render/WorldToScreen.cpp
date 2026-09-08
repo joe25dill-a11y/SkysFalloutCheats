@@ -321,6 +321,29 @@ bool GetEspCamInfo(EspCamInfo& out)
 	return true;
 }
 
+bool TryReadAimEye(float& outX, float& outY, float& outZ)
+{
+	if (void* node = FindCameraNode()) {
+		float cx = 0, cy = 0, cz = 0;
+		if (ReadNodeTranslate(node, &cx, &cy, &cz)) {
+			outX = cx; outY = cy; outZ = cz;
+			return true;
+		}
+	}
+	if (g_cam.valid) {
+		outX = g_cam.eyeX;
+		outY = g_cam.eyeY;
+		outZ = g_cam.eyeZ;
+		return true;
+	}
+	float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
+	if (!ReadPlayerPose(&px, &py, &pz, &rx, &ry, &rz)) return false;
+	outX = px;
+	outY = py;
+	outZ = pz + 120.f;
+	return true;
+}
+
 ScreenPos WorldToScreen(float wx, float wy, float wz)
 {
 	ScreenPos out{};

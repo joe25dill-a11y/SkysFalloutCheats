@@ -23,6 +23,9 @@ void CaptureCameraForFrame(IDirect3DDevice9* device);
 
 bool GetEspCamInfo(EspCamInfo& out);
 
+// Safe on MainGameLoop: cam-node eye, else last captured eye, else player+120.
+bool TryReadAimEye(float& outX, float& outY, float& outZ);
+
 ScreenPos WorldToScreen(float wx, float wy, float wz);
 
 // Project world AABB (halfW on X, halfD on Y, halfH on Z) via all 8 corners.

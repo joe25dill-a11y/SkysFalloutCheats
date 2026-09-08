@@ -1,4 +1,5 @@
 #include "core/GameState.hpp"
+#include "core/Config.hpp"
 #include "core/Log.hpp"
 #include "core/Diag.hpp"
 #include "core/Input.hpp"
@@ -28,6 +29,9 @@ constexpr std::uint32_t kAV_ActionPoints = 12;
 constexpr std::uint32_t kAV_Health = 16;
 constexpr std::uint32_t kExtraContainerChanges = 0x15;
 
+constexpr std::uint8_t kFormType_TESKey = 0x15;
+constexpr std::uint8_t kFormType_TESObjectBOOK = 0x19;
+constexpr std::uint8_t kFormType_TESObjectARMO = 0x1A;
 constexpr std::uint8_t kFormType_TESObjectCONT = 0x1B;
 constexpr std::uint8_t kFormType_TESObjectDOOR = 0x1C;
 constexpr std::uint8_t kFormType_TESObjectMISC = 0x1F;
@@ -36,6 +40,7 @@ constexpr std::uint8_t kFormType_TESAmmo = 0x29;
 constexpr std::uint8_t kFormType_TESNPC = 0x2A;
 constexpr std::uint8_t kFormType_TESCreature = 0x2B;
 constexpr std::uint8_t kFormType_AlchemyItem = 0x2F;
+constexpr std::uint8_t kFormType_BGSNote = 0x30;
 constexpr std::uint8_t kFormType_Character = 0x3B;
 constexpr std::uint8_t kFormType_Creature = 0x3C;
 
@@ -251,7 +256,11 @@ bool IsLootBaseType(std::uint8_t t)
 	return t == kFormType_TESObjectWEAP
 		|| t == kFormType_TESAmmo
 		|| t == kFormType_TESObjectMISC
-		|| t == kFormType_AlchemyItem;
+		|| t == kFormType_AlchemyItem
+		|| t == kFormType_TESObjectARMO
+		|| t == kFormType_TESObjectBOOK
+		|| t == kFormType_TESKey
+		|| t == kFormType_BGSNote;
 }
 
 const char* NameForRef(void* refr); // defined below
@@ -1011,6 +1020,49 @@ void GameState::ScanNearby(float maxDist, int maxMarkers, bool npcs, bool loot, 
 		return;
 	}
 	snap_.nearby = std::move(markers);
+}
+
+void GameState::WantNearbyScan(float maxDist, int maxMarkers, bool npcs, bool loot, bool doors)
+{
+	if (maxDist <= 0.f || maxMarkers <= 0) return;
+	if (!npcs && !loot && !doors) return;
+	nearbyWantPending_ = true;
+	if (maxDist > nearbyWantDist_) nearbyWantDist_ = maxDist;
+	if (maxMarkers > nearbyWantMarkers_) nearbyWantMarkers_ = maxMarkers;
+	nearbyWantNpcs_ = nearbyWantNpcs_ || npcs;
+	nearbyWantLoot_ = nearbyWantLoot_ || loot;
+	nearbyWantDoors_ = nearbyWantDoors_ || doors;
+}
+
+void GameState::FlushNearbyScanNow()
+{
+	if (!nearbyWantPending_) return;
+	const float dist = nearbyWantDist_;
+	const int markers = nearbyWantMarkers_;
+	const bool npcs = nearbyWantNpcs_;
+	const bool loot = nearbyWantLoot_;
+	const bool doors = nearbyWantDoors_;
+	nearbyWantPending_ = false;
+	nearbyWantDist_ = 0.f;
+	nearbyWantMarkers_ = 0;
+	nearbyWantNpcs_ = nearbyWantLoot_ = nearbyWantDoors_ = false;
+	ScanNearby(dist, markers, npcs, loot, doors);
+}
+
+void GameState::FlushNearbyScan(float dt)
+{
+	if (!nearbyWantPending_) {
+		nearbyFlushAccum_ = 0.f;
+		return;
+	}
+	nearbyFlushAccum_ += dt;
+	int intervalMs = Config::Get().Data().performance.espScanMs;
+	if (intervalMs < 50) intervalMs = 50;
+	if (intervalMs > 2000) intervalMs = 2000;
+	if (nearbyFlushAccum_ < static_cast<float>(intervalMs) * 0.001f)
+		return;
+	nearbyFlushAccum_ = 0.f;
+	FlushNearbyScanNow();
 }
 
 } // namespace sfc

@@ -104,6 +104,32 @@ bool IsPlayerTeammate(void* actor)
 	return false;
 }
 
+void* LookupFormById(std::uint32_t formId)
+{
+	if (formId == 0) return nullptr;
+	__try {
+		struct FormsMap {
+			void** vtbl;
+			std::uint32_t numBuckets;
+			struct Entry {
+				Entry* next;
+				std::uint32_t key;
+				void* data;
+			}** buckets;
+			std::uint32_t numItems;
+		};
+		constexpr std::uintptr_t kFormsMapAbs = 0x011C54C0;
+		FormsMap** slot = reinterpret_cast<FormsMap**>(Rel(kFormsMapAbs));
+		FormsMap* map = slot ? *slot : nullptr;
+		if (!map || !map->buckets || map->numBuckets == 0) return nullptr;
+		for (auto* e = map->buckets[formId % map->numBuckets]; e; e = e->next) {
+			if (e->key == formId) return e->data;
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {}
+	return nullptr;
+}
+
 float DistToPlayer(void* actor, void* player)
 {
 	__try {
@@ -187,6 +213,21 @@ CompanionFollow& CompanionFollow::Get()
 {
 	static CompanionFollow instance;
 	return instance;
+}
+
+bool CompanionFollow::IsPlayerTeammateActor(void* actor)
+{
+	return IsPlayerTeammate(actor);
+}
+
+bool CompanionFollow::IsAllyRef(std::uint32_t refId)
+{
+	if (refId == 0 || refId == 0x14) return true; // player / invalid
+	void* form = LookupFormById(refId);
+	if (!form) return false;
+	if (IsPlayerTeammate(form)) return true;
+	const std::uint32_t baseId = BaseFormId(form);
+	return IsKnownCompanionBase(baseId);
 }
 
 std::vector<std::uint32_t> CompanionFollow::CollectTeammateRefs() const

@@ -49,7 +49,8 @@ nlohmann::json ToJson(const AppConfig& c)
 			{"maxEspMarkers", c.performance.maxEspMarkers},
 			{"espMaxDistance", c.performance.espMaxDistance},
 			{"eventDrivenPreferred", c.performance.eventDrivenPreferred},
-			{"espEnabled", c.performance.espEnabled}
+			{"espEnabled", c.performance.espEnabled},
+			{"aimbotEnabled", c.performance.aimbotEnabled}
 		}},
 		{"diagnostics", {
 			{"enabled", c.diagnostics.enabled},
@@ -61,6 +62,7 @@ nlohmann::json ToJson(const AppConfig& c)
 			{"godModeVk", c.controls.godModeVk},
 			{"healVk", c.controls.healVk},
 			{"addCapsVk", c.controls.addCapsVk},
+			{"smartGrabVk", c.controls.smartGrabVk},
 			{"blockGameInputWhenMenuOpen", c.controls.blockGameInputWhenMenuOpen}
 		}}
 	};
@@ -113,6 +115,7 @@ void FromJson(const nlohmann::json& j, AppConfig& c)
 		c.performance.espMaxDistance = p.value("espMaxDistance", c.performance.espMaxDistance);
 		c.performance.eventDrivenPreferred = p.value("eventDrivenPreferred", c.performance.eventDrivenPreferred);
 		c.performance.espEnabled = p.value("espEnabled", c.performance.espEnabled);
+		c.performance.aimbotEnabled = p.value("aimbotEnabled", c.performance.aimbotEnabled);
 		// Clamp range: 100 ft .. 5000 ft (stored as game units).
 		constexpr float kMinU = 100.f * (128.f / 6.f);
 		constexpr float kMaxU = 5000.f * (128.f / 6.f);
@@ -135,6 +138,7 @@ void FromJson(const nlohmann::json& j, AppConfig& c)
 		c.controls.godModeVk = k.value("godModeVk", c.controls.godModeVk);
 		c.controls.healVk = k.value("healVk", c.controls.healVk);
 		c.controls.addCapsVk = k.value("addCapsVk", c.controls.addCapsVk);
+		c.controls.smartGrabVk = k.value("smartGrabVk", c.controls.smartGrabVk);
 		c.controls.blockGameInputWhenMenuOpen = k.value("blockGameInputWhenMenuOpen", c.controls.blockGameInputWhenMenuOpen);
 	}
 }

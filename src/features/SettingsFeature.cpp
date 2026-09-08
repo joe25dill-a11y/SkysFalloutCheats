@@ -66,8 +66,10 @@ public:
 		dirty |= ImGui::InputInt("God Mode VK##set_godvk", &cfg.controls.godModeVk);
 		dirty |= ImGui::InputInt("Full Heal VK##set_healvk", &cfg.controls.healVk);
 		dirty |= ImGui::InputInt("Add Caps VK##set_capsvk", &cfg.controls.addCapsVk);
+		dirty |= ImGui::InputInt("Smart Grab VK##set_grabvk", &cfg.controls.smartGrabVk);
 		dirty |= ImGui::Checkbox("Block Game Input When Menu Open##set_block", &cfg.controls.blockGameInputWhenMenuOpen);
-		ImGui::TextDisabled("INSERT=0x2D  F1=0x70  F5=0x74  F6=0x75  F7=0x76");
+		ImGui::TextDisabled("INSERT=0x2D  F1=0x70  F5=0x74  F6=0x75  F7=0x76  F8=0x77");
+		ImGui::TextDisabled("F8 Smart Grab = loot what you look at (ESP vacuum settings).");
 		ImGui::TextDisabled("Restart / re-init needed after changing VK binds.");
 
 		ImGui::SeparatorText("Persistence");

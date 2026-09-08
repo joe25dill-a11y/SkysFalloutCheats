@@ -28,6 +28,8 @@ const NavItem kNav[] = {
 	{"QUESTS", FeatureCategory::Quests},
 	{"CAMERA", FeatureCategory::Camera},
 	{"ESP", FeatureCategory::Esp},
+	{"GRAB", FeatureCategory::Grab},
+	{"AIM", FeatureCategory::Aim},
 	{"PRESETS", FeatureCategory::Presets},
 	{"UTILITY", FeatureCategory::Utility},
 	{"SETTINGS", FeatureCategory::Settings},
@@ -57,7 +59,7 @@ void MainMenu::Draw()
 	ImVec4 accent = Theme::Accent();
 	ImGui::TextColored(accent, "SKY'S FALLOUT CHEATS");
 	ImGui::SameLine();
-	ImGui::TextDisabled("  Utility Console // playable-v17o");
+	ImGui::TextDisabled("  Utility Console // playable-v24a");
 	{
 		const auto& snap = GameState::Get().Snapshot();
 		if (snap.valid && snap.healthStatus == ReadStatus::Valid) {
@@ -72,7 +74,7 @@ void MainMenu::Draw()
 		} else {
 			ImGui::TextDisabled("Live HUD syncing from vanilla meters...");
 		}
-		ImGui::TextDisabled("INSERT menu  |  ESC close  |  F1 search  |  JIP=%s",
+		ImGui::TextDisabled("INSERT menu | F1 search | F5 god | F6 heal | F7 caps | F8 grab | JIP=%s",
 			Compat().jipPresent ? "yes" : "no");
 	}
 	ImGui::Separator();

@@ -109,8 +109,11 @@ void DrawOverlaySafe(IDirect3DDevice9* device)
 	device->GetTransform(D3DTS_VIEW, &oldView);
 	device->GetTransform(D3DTS_PROJECTION, &oldProj);
 
-	if (Config::Get().Data().performance.espEnabled)
-		CaptureCameraForFrame(device);
+	{
+		const auto& perf = Config::Get().Data().performance;
+		if (perf.espEnabled || perf.aimbotEnabled)
+			CaptureCameraForFrame(device);
+	}
 
 	ImGuiBackend::OnEndScene(device);
 	if (App::Get().Ready())

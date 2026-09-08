@@ -9,7 +9,7 @@ namespace sfc {
 enum class FeatureCategory {
 	Player, Weapons, Armor, Inventory, Npcs, World, Map, Teleport,
 	Quests, Perks, Skills, Gameplay, Visuals, Utility, Presets,
-	Settings, Debug, Camera, Esp, Search, Favorites
+	Settings, Debug, Camera, Esp, Aim, Grab, Search, Favorites
 };
 
 inline const char* CategoryName(FeatureCategory c)
@@ -34,6 +34,8 @@ inline const char* CategoryName(FeatureCategory c)
 	case FeatureCategory::Debug: return "DEBUG";
 	case FeatureCategory::Camera: return "CAMERA";
 	case FeatureCategory::Esp: return "ESP";
+	case FeatureCategory::Aim: return "AIM";
+	case FeatureCategory::Grab: return "GRAB";
 	case FeatureCategory::Search: return "SEARCH";
 	case FeatureCategory::Favorites: return "FAVORITES";
 	}

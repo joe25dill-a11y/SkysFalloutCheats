@@ -34,6 +34,9 @@ bool IsHeavyConsoleLine(const char* line)
 {
 	// These rebuild actors / cells / AI — unsafe to spam, especially with ImGui open.
 	// Do NOT match bare "kill" as a substring — it hits "skills".
+	// Do NOT match "MoveToContainer" as "moveto" — that falsely rate-limits real loot grabs.
+	if (ContainsInsensitive(line, "movetocontainer"))
+		return false;
 	return ContainsInsensitive(line, "resurrect")
 		|| ContainsInsensitive(line, "placeatme")
 		|| ContainsInsensitive(line, "moveto")
@@ -102,10 +105,51 @@ bool GameWorkQueue::EnqueueConsole(const std::string& line)
 
 	const int idx = (head_ + count_) % kMaxPending;
 	std::snprintf(lines_[idx], sizeof(lines_[idx]), "%s", line.c_str());
+	refIds_[idx] = 0;
 	fireAtMs_[idx] = now + delay;
 	++count_;
 	if (DiagEnabled())
 		DiagEvent("console.enqueue", line.c_str());
+	return true;
+}
+
+bool GameWorkQueue::EnqueueConsoleOnRef(std::uint32_t refId, const std::string& cmd)
+{
+	if (refId == 0 || cmd.empty()) return false;
+
+	for (int i = 0; i < count_; ++i) {
+		const int idx = (head_ + i) % kMaxPending;
+		if (refIds_[idx] == refId && std::strcmp(lines_[idx], cmd.c_str()) == 0)
+			return true;
+	}
+
+	if (count_ >= kMaxPending) {
+		++dropped_;
+		SFC_WARN("[GAMEWORK] console queue full — dropped OnRef %08X: %s (totalDropped=%u)",
+			refId, cmd.c_str(), dropped_);
+		return false;
+	}
+
+	const bool heavy = IsHeavyConsoleLine(cmd.c_str());
+	const unsigned now = GetTickCount();
+	unsigned delay = 0;
+	if (heavy) {
+		delay = 400;
+		if (Input::Get().MenuOpen()) Input::Get().SetMenuOpen(false);
+		if (Input::Get().SearchOpen()) Input::Get().SetSearchOpen(false);
+		SFC_LOG("[GAMEWORK] heavy OnRef queued (+%ums): %08X -> %s", delay, refId, cmd.c_str());
+	}
+
+	const int idx = (head_ + count_) % kMaxPending;
+	std::snprintf(lines_[idx], sizeof(lines_[idx]), "%s", cmd.c_str());
+	refIds_[idx] = refId;
+	fireAtMs_[idx] = now + delay;
+	++count_;
+	if (DiagEnabled()) {
+		char detail[640];
+		std::snprintf(detail, sizeof(detail), "%08X|%s", refId, cmd.c_str());
+		DiagEvent("console.enqueue_ref", detail);
+	}
 	return true;
 }
 
@@ -117,6 +161,7 @@ void GameWorkQueue::DrainConsole()
 			break; // FIFO — wait for delay
 
 		const char* line = lines_[head_];
+		const std::uint32_t refId = refIds_[head_];
 		const bool heavy = IsHeavyConsoleLine(line);
 
 		if (heavy && lastHeavyRunMs_ != 0 && (now - lastHeavyRunMs_) < 1500) {
@@ -127,10 +172,11 @@ void GameWorkQueue::DrainConsole()
 		}
 
 		DiagScope scope("console.run", line);
-		const bool ok = ConsoleBridge::Get().RunImmediate(line);
+		const bool ok = (refId != 0)
+			? ConsoleBridge::Get().RunImmediateOnRef(refId, line)
+			: ConsoleBridge::Get().RunImmediate(line);
 		if (heavy) {
 			lastHeavyRunMs_ = GetTickCount();
-			// Give Fallout time to rebuild actor/HUD meshes — stop our overlay fighting it.
 			ResetWorldSettle("heavy_console");
 		}
 		if (!ok) scope.Fail("RunScriptLine2 failed");

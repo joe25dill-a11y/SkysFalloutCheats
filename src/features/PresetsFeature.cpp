@@ -2,6 +2,7 @@
 #include "core/FeatureRegistry.hpp"
 #include "core/Config.hpp"
 #include "core/Compat.hpp"
+#include "core/LootVacuum.hpp"
 #include "core/Log.hpp"
 #include "ui/Notifications.hpp"
 #include "imgui.h"
@@ -17,8 +18,8 @@ namespace sfc {
 namespace {
 
 const char* kBuiltinNames[] = {
-	"Exploration", "Combat", "Testing", "Screenshot",
-	"Immersion", "GodMode", "MinimalHUD"
+	"Exploration", "Combat", "Loot", "Testing", "Screenshot",
+	"Immersion", "GodMode", "MinimalHUD", "AimMagic", "AimCombat"
 };
 
 std::filesystem::path PresetsDir()
@@ -186,6 +187,24 @@ private:
 		const auto path = PathFor(name);
 		std::ifstream in(path);
 		if (!in) {
+			if (_stricmp(name.c_str(), "Loot") == 0) {
+				LootVacuum::Get().ApplyLootPresetDefaults();
+				Config::Get().Data().performance.espEnabled = true;
+				if (IFeature* esp = FeatureRegistry::Get().Find("esp")) {
+					nlohmann::json merge = esp->Serialize();
+					auto loot = LootVacuum::Get().Serialize();
+					for (auto it = loot.begin(); it != loot.end(); ++it)
+						merge[it.key()] = it.value();
+					merge["enabled"] = true;
+					merge["showLoot"] = true;
+					merge["showContainers"] = true;
+					esp->Deserialize(merge);
+				}
+				Config::Get().Data().lastPreset = name;
+				Config::Get().MarkDirty();
+				Notify("Loot preset applied");
+				return;
+			}
 			Notify("Preset not found");
 			return;
 		}
@@ -193,6 +212,8 @@ private:
 			nlohmann::json j;
 			in >> j;
 			ApplyPreset(j);
+			if (_stricmp(name.c_str(), "Loot") == 0 && j.contains("features") && j["features"].contains("esp"))
+				LootVacuum::Get().Deserialize(j["features"]["esp"]);
 			Config::Get().Data().lastPreset = name;
 			Config::Get().MarkDirty();
 			Notify("Preset loaded");

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 
 namespace sfc {
@@ -26,6 +27,7 @@ public:
 
 	// Queue a console line. Heavy cmds (resurrect/kill/coc/…) are delayed + de-duped.
 	bool EnqueueConsole(const std::string& line);
+	bool EnqueueConsoleOnRef(std::uint32_t refId, const std::string& cmd);
 
 	void DrainConsole();
 
@@ -34,6 +36,7 @@ public:
 private:
 	static constexpr int kMaxPending = 96;
 	char lines_[kMaxPending][512]{};
+	std::uint32_t refIds_[kMaxPending]{};
 	unsigned fireAtMs_[kMaxPending]{};
 	int head_ = 0;
 	int count_ = 0;

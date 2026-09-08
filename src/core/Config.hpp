@@ -41,6 +41,7 @@ struct PerformanceSettings {
 	float espMaxDistance = 106667.f; // ≈ 5000 feet (128 units = 6 ft)
 	bool eventDrivenPreferred = true;
 	bool espEnabled = false;
+	bool aimbotEnabled = false;
 };
 
 struct DiagnosticsSettings {
@@ -56,6 +57,7 @@ struct ControlSettings {
 	int godModeVk = 0x74; // VK_F5
 	int healVk = 0x75; // VK_F6
 	int addCapsVk = 0x76; // VK_F7
+	int smartGrabVk = 0x77; // VK_F8
 	bool blockGameInputWhenMenuOpen = true;
 };
 

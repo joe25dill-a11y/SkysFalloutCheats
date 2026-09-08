@@ -27,6 +27,10 @@ public:
 	// Must only be called from MainGameLoop / safe game context.
 	std::vector<std::uint32_t> CollectTeammateRefs() const;
 
+	// Safe for MainGameLoop. Used by aimbot TargetManager to skip allies.
+	static bool IsPlayerTeammateActor(void* actor);
+	static bool IsAllyRef(std::uint32_t refId);
+
 private:
 	bool enabled_ = true;
 	bool pending_ = false;

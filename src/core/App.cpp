@@ -9,6 +9,7 @@
 #include "core/SearchIndex.hpp"
 #include "core/ConsoleBridge.hpp"
 #include "core/Cheats.hpp"
+#include "core/LootVacuum.hpp"
 #include "core/GameState.hpp"
 #include "core/Gameplay.hpp"
 #include "core/CompanionFollow.hpp"
@@ -47,7 +48,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s playable-v17o (ESP Go/Pull/Heal + name/clamp polish)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v24a (MoveToContainer not rate-limited)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);
@@ -74,7 +75,10 @@ bool App::Init(const char* runtimeDir)
 	cfg.Data().hud.worldInfo = true;
 	// Do NOT MarkDirty here — that forced a disk save mid-load and correlated with freezes.
 	IsolationLogBoot();
-	SFC_LOG("[CONFIG] isolation=off — playable-v17 nearby scan / ESP");
+	SFC_LOG("[CONFIG] isolation=off — playable-v22 grab filters / silent NPC");
+	if (cfg.Data().performance.aimbotEnabled) {
+		SFC_WARN("[CONFIG] Aimbot enabled — Snap/Smooth/MagicBullet available");
+	}
 	BootMark("CONFIG", "loaded");
 	ResetWorldSettle("boot");
 
@@ -89,6 +93,7 @@ bool App::Init(const char* runtimeDir)
 	Hotkeys::Get().Bind({"god_mode", "God Mode", cfg.Data().controls.godModeVk, false, false, false, true});
 	Hotkeys::Get().Bind({"full_heal", "Full Heal", cfg.Data().controls.healVk, false, false, false, true});
 	Hotkeys::Get().Bind({"add_caps", "Add Caps", cfg.Data().controls.addCapsVk, false, false, false, true});
+	Hotkeys::Get().Bind({"smart_grab", "Smart Grab", cfg.Data().controls.smartGrabVk, false, false, false, true});
 
 	Hotkeys::Get().SetCallback("god_mode", []() {
 		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
@@ -104,6 +109,11 @@ bool App::Init(const char* runtimeDir)
 		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
 		if (!ConsoleBridge::Get().IsReady()) return;
 		CheatAddCaps(1000);
+	});
+	Hotkeys::Get().SetCallback("smart_grab", []() {
+		if (!IsolationAllowHotkeys() || !IsolationAllowConsole()) return;
+		if (!ConsoleBridge::Get().IsReady()) return;
+		LootVacuum::Get().SmartGrab();
 	});
 
 	// Prove which DLL file is actually loaded (stale-deploy trap).
@@ -164,6 +174,7 @@ void App::TickGameWorld()
 	if (IsolationAllowCompanionAndTeleportTicks()) {
 		CompanionFollow::Get().Tick();
 		FeatureRegistry::Get().TickAll(1.f / 60.f);
+		GameState::Get().FlushNearbyScan(1.f / 60.f);
 	}
 
 	q.LeaveGameLoop();

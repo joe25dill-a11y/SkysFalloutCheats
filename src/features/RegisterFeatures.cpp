@@ -14,6 +14,8 @@ std::unique_ptr<IFeature> CreateTeleportFeature();
 std::unique_ptr<IFeature> CreateQuestFeature();
 std::unique_ptr<IFeature> CreateCameraFeature();
 std::unique_ptr<IFeature> CreateEspFeature();
+std::unique_ptr<IFeature> CreateGrabFeature();
+std::unique_ptr<IFeature> CreateAimbotFeature();
 std::unique_ptr<IFeature> CreatePresetsFeature();
 std::unique_ptr<IFeature> CreateSettingsFeature();
 std::unique_ptr<IFeature> CreateUtilityFeature();
@@ -32,6 +34,8 @@ void RegisterBuiltinFeatures()
 	reg.Register(CreateQuestFeature());
 	reg.Register(CreateCameraFeature());
 	reg.Register(CreateEspFeature());
+	reg.Register(CreateGrabFeature());
+	reg.Register(CreateAimbotFeature());
 	reg.Register(CreatePresetsFeature());
 	reg.Register(CreateSettingsFeature());
 	reg.Register(CreateUtilityFeature());

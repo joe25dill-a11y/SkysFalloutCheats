@@ -24,6 +24,8 @@ add_library(SkysFalloutCheats SHARED
   src/core/Cheats.cpp
   src/core/Gameplay.cpp
   src/core/CompanionFollow.cpp
+  src/core/TargetManager.cpp
+  src/core/LootVacuum.cpp
   src/core/Boot.cpp
   src/core/Diag.cpp
   src/core/Isolation.cpp
@@ -47,6 +49,8 @@ add_library(SkysFalloutCheats SHARED
   src/features/QuestFeature.cpp
   src/features/CameraFeature.cpp
   src/features/EspFeature.cpp
+  src/features/GrabFeature.cpp
+  src/features/AimbotFeature.cpp
   src/features/PresetsFeature.cpp
   src/features/SettingsFeature.cpp
   src/features/UtilityFeature.cpp

@@ -2,6 +2,7 @@
 #include "core/Config.hpp"
 #include "core/Compat.hpp"
 #include "core/ConsoleBridge.hpp"
+#include "core/LootVacuum.hpp"
 #include "core/Log.hpp"
 #include "ui/Notifications.hpp"
 #include "imgui.h"
@@ -19,6 +20,27 @@ public:
 
 	void DrawMenu() override
 	{
+		ImGui::SeparatorText("Quick loot");
+		ImGui::TextWrapped("Uses ESP vacuum filters. F8 = Smart Grab (look-at loot).");
+		if (ImGui::Button("Smart Grab##util_grab")) {
+			LootVacuum::Get().SmartGrab();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Toggle Vacuum##util_vac")) {
+			auto& s = LootVacuum::Get().Settings();
+			s.autoVacuum = !s.autoVacuum;
+			Notify(s.autoVacuum ? "Vacuum ON" : "Vacuum OFF");
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Loot Preset Defaults##util_lootdef")) {
+			LootVacuum::Get().ApplyLootPresetDefaults();
+			Config::Get().Data().performance.espEnabled = true;
+			Notify("Loot defaults applied — enable ESP if boxes are off");
+		}
+		ImGui::TextDisabled("Vacuum %s  |  actions %d",
+			LootVacuum::Get().Settings().autoVacuum ? "ON" : "OFF",
+			LootVacuum::Get().ActionsThisSession());
+
 		ImGui::SeparatorText("Config");
 		if (ImGui::Button("Reload Config##util_reload")) {
 			const auto& path = Config::Get().Path();
@@ -63,6 +85,9 @@ public:
 
 	void CollectSearch(std::vector<SearchEntry>& out) override
 	{
+		out.push_back({"utility.smartgrab", "Smart Grab", "loot grab vacuum f8", FeatureCategory::Utility, [] {
+			LootVacuum::Get().SmartGrab();
+		}});
 		out.push_back({"utility.reload", "Reload Config", "reload config settings", FeatureCategory::Utility, {}});
 		out.push_back({"utility.console", "Run Console Line", "console command advanced", FeatureCategory::Utility, {}});
 		out.push_back({"utility.log", "Log Path", "log file debug path", FeatureCategory::Utility, {}});

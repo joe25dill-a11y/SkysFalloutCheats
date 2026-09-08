@@ -5,6 +5,7 @@
 #include "core/GameState.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
+#include "core/LootVacuum.hpp"
 #include "render/WorldToScreen.hpp"
 #include "ui/Notifications.hpp"
 #include "imgui.h"
@@ -122,25 +123,16 @@ public:
 
 	void Tick(float dt) override
 	{
-		if (!enabled_) {
-			if (!GameState::Get().Snapshot().nearby.empty())
-				GameState::Get().ScanNearby(0.f, 0, false, false, false);
-			return;
-		}
-		accumMs_ += dt * 1000.f;
-		const int interval = Config::Get().Data().performance.espScanMs;
-		if (accumMs_ < static_cast<float>(interval > 16 ? interval : 16)) return;
-		accumMs_ = 0.f;
-
+		if (!enabled_) return;
 		auto& perf = Config::Get().Data().performance;
-		GameState::Get().ScanNearby(
+		GameState::Get().WantNearbyScan(
 			perf.espMaxDistance,
 			perf.maxEspMarkers,
 			showNpcs_,
 			showLoot_ || showContainers_,
 			showDoors_);
-
 		lastScan_ = static_cast<int>(GameState::Get().Snapshot().nearby.size());
+		(void)dt;
 	}
 
 	void DrawMenu() override
@@ -171,6 +163,12 @@ public:
 		ImGui::Checkbox("Ground loot##esp_loot", &showLoot_);
 		ImGui::Checkbox("Containers / chests##esp_containers", &showContainers_);
 
+		ImGui::SeparatorText("Loot / Grab");
+		ImGui::TextWrapped("Vacuum, Smart Grab, and Grab All live in the GRAB tab now.");
+		if (ImGui::Button("Open tip: use GRAB tab##esp_grab_tip")) {
+			Notify("Switch left nav to GRAB");
+		}
+
 		ImGui::SeparatorText("Limits");
 		bool dirty = false;
 		float rangeFt = DistFeet(perf.espMaxDistance);
@@ -184,12 +182,14 @@ public:
 		if (dirty) Config::Get().MarkDirty();
 
 		if (ImGui::Button("Scan now##esp_scan_btn")) {
-			GameState::Get().ScanNearby(
-				perf.espMaxDistance,
-				perf.maxEspMarkers,
+			auto& perf2 = Config::Get().Data().performance;
+			GameState::Get().WantNearbyScan(
+				perf2.espMaxDistance,
+				perf2.maxEspMarkers,
 				showNpcs_,
 				showLoot_ || showContainers_,
 				showDoors_);
+			GameState::Get().FlushNearbyScanNow();
 			lastScan_ = static_cast<int>(GameState::Get().Snapshot().nearby.size());
 		}
 		ImGui::SameLine();
@@ -224,10 +224,23 @@ public:
 							Notify("Heal sent");
 						}
 					} else {
+						if (m.kind == 1 || m.kind == 3) {
+							ImGui::SameLine();
+							if (ImGui::SmallButton("Loot")) {
+								if (m.kind == 1) {
+									ConsoleBridge::Get().Runf("\"%08X\".Activate player 1", m.refId);
+									ConsoleBridge::Get().Runf("\"%08X\".Activate player", m.refId);
+									Notify("Activate (pickup)");
+								} else {
+									ConsoleBridge::Get().Runf("\"%08X\".RemoveAllItems player", m.refId);
+									Notify("Transferred to you");
+								}
+							}
+						}
 						ImGui::SameLine();
 						if (ImGui::SmallButton("Pull")) {
-							ConsoleBridge::Get().Runf("%08X.moveto player", m.refId);
-							Notify("Pulled to you");
+							ConsoleBridge::Get().Runf("\"%08X\".moveto player", m.refId);
+							Notify("Moved to feet (not inventory)");
 						}
 					}
 				}
@@ -236,7 +249,7 @@ public:
 			}
 		}
 		ImGui::EndChild();
-		ImGui::TextDisabled("Go = you to them | Pull = loot/door to you | Bring/Heal = NPCs");
+		ImGui::TextDisabled("Go = you to them | Loot = inventory transfer | Pull = moveto feet only");
 	}
 
 	void DrawHud() override
@@ -395,6 +408,8 @@ public:
 		showLoot_ = j.value("showLoot", showLoot_);
 		showContainers_ = j.value("showContainers", showContainers_);
 		showDoors_ = j.value("showDoors", showDoors_);
+		// Legacy presets stored vacuum under esp — still apply.
+		LootVacuum::Get().Deserialize(j);
 	}
 
 	bool Init() override
@@ -413,7 +428,7 @@ private:
 	bool showLoot_ = true;
 	bool showContainers_ = true;
 	bool showDoors_ = true;
-	float accumMs_ = 0.f;
+	float accumMs_ = 0.f; // unused; nearby scan is merged in GameState
 	int lastScan_ = 0;
 	int lastDrawn_ = 0;
 	int lastW2sOk_ = 0;
