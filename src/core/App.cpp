@@ -47,7 +47,7 @@ bool App::Init(const char* runtimeDir)
 
 	LogInit((dataDir / "sfc.log").string());
 	BootMark("BOOT", "App::Init begin");
-	SFC_LOG("[BOOT] build=%s %s playable-v17f (pitch invert + cam-node look)", __DATE__, __TIME__);
+	SFC_LOG("[BOOT] build=%s %s playable-v17g (player-rot W2S, no cam-node basis)", __DATE__, __TIME__);
 
 	BootMark("NVSE", ConsoleBridge::Get().IsReady() ? "console ready" : "console UNAVAILABLE");
 	CompatProbe(runtimeDir, ConsoleBridge::Get().IsReady(), Compat().nvseVersion, Compat().runtimeVersion);

@@ -3,7 +3,6 @@
 #include <windows.h>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <algorithm>
 
 namespace sfc {
@@ -16,8 +15,6 @@ constexpr std::uintptr_t kCamera3rdAbs = 0x011E07D4;
 
 constexpr std::ptrdiff_t kOff_RotX = 0x024;
 constexpr std::ptrdiff_t kOff_PosX = 0x030;
-// JIP NiAVObject: m_transformWorld @ 0x68 (NiMatrix33 + NiPoint3 + scale)
-constexpr std::ptrdiff_t kOff_WorldRotate = 0x068;
 constexpr std::ptrdiff_t kOff_WorldTranslate = 0x08C;
 
 constexpr float kPi = 3.14159265f;
@@ -47,24 +44,19 @@ float Dot3(const float* a, const float* b)
 	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-float Len3(const float* v)
-{
-	return std::sqrt(Dot3(v, v));
-}
-
-void Norm3(float* v)
-{
-	const float L = Len3(v);
-	if (L > 1.0e-4f) {
-		v[0] /= L; v[1] /= L; v[2] /= L;
-	}
-}
-
 void Cross3(const float* a, const float* b, float* o)
 {
 	o[0] = a[1] * b[2] - a[2] * b[1];
 	o[1] = a[2] * b[0] - a[0] * b[2];
 	o[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+void Norm3(float* v)
+{
+	const float L = std::sqrt(Dot3(v, v));
+	if (L > 1.0e-4f) {
+		v[0] /= L; v[1] /= L; v[2] /= L;
+	}
 }
 
 struct CamFrame {
@@ -73,8 +65,8 @@ struct CamFrame {
 	float sw = 1280, sh = 720;
 	float eyeX = 0, eyeY = 0, eyeZ = 0;
 	float yaw = 0;
-	float pitch = 0; // view pitch (looking up = positive)
-	float fovY = 75.f * kPi / 180.f;
+	float pitch = 0;
+	float fovY = 82.f * kPi / 180.f;
 	bool hasLook = false;
 	float forward[3]{};
 	float right[3]{};
@@ -88,9 +80,8 @@ void* FindCameraNode()
 	__try {
 		void** n3 = reinterpret_cast<void**>(Rel(kCamera3rdAbs));
 		void** n1 = reinterpret_cast<void**>(Rel(kCamera1stAbs));
-		// Prefer 1st-person node when present — matches iron-sights / FPS look.
-		if (n1 && ValidUserPtr(*n1)) return *n1;
 		if (n3 && ValidUserPtr(*n3)) return *n3;
+		if (n1 && ValidUserPtr(*n1)) return *n1;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER) {}
 	return nullptr;
@@ -130,48 +121,26 @@ bool ReadNodeTranslate(void* node, float* x, float* y, float* z)
 	}
 }
 
-// FNV rotX: looking UP is typically negative — convert to math pitch (up = +).
-void BasisFromYawPitch(float yaw, float viewPitch, float* forward, float* right, float* up)
+// Player REFR rot: yaw=rotZ, pitch=rotX (same as v17e — that path drew boxes).
+void BasisFromPlayerRot(float yaw, float pitch, float* forward, float* right, float* up)
 {
 	const float cy = std::cosf(yaw);
 	const float sy = std::sinf(yaw);
-	const float cp = std::cosf(viewPitch);
-	const float sp = std::sinf(viewPitch);
+	const float cp = std::cosf(pitch);
+	const float sp = std::sinf(pitch);
 
 	forward[0] = sy * cp;
 	forward[1] = cy * cp;
-	forward[2] = sp;
+	forward[2] = -sp; // FNV rotX: looking up → negative; screen-up needs +Z look
 
 	right[0] = cy;
 	right[1] = -sy;
 	right[2] = 0.f;
 
-	Cross3(right, forward, up); // up = right × forward keeps right-handed Z-up
+	Cross3(right, forward, up);
 	Norm3(forward);
 	Norm3(right);
 	Norm3(up);
-}
-
-// Pull look axes from camera NiNode world rotation (rows).
-bool BasisFromCameraNode(void* node, float* forward, float* right, float* up)
-{
-	__try {
-		const float* r = reinterpret_cast<const float*>(reinterpret_cast<char*>(node) + kOff_WorldRotate);
-		// Row0 = right, row1 = up, row2 = -forward (Gamebryo camera often looks down -Z local)
-		right[0] = r[0]; right[1] = r[1]; right[2] = r[2];
-		up[0] = r[3]; up[1] = r[4]; up[2] = r[5];
-		forward[0] = -r[6]; forward[1] = -r[7]; forward[2] = -r[8];
-		if (Len3(forward) < 0.1f || Len3(right) < 0.1f) return false;
-		Norm3(forward);
-		Norm3(right);
-		// Re-orthogonalize up
-		Cross3(right, forward, up);
-		Norm3(up);
-		return true;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER) {
-		return false;
-	}
 }
 
 bool ProjectLook(const CamFrame& cam, float wx, float wy, float wz, float& sx, float& sy)
@@ -179,7 +148,7 @@ bool ProjectLook(const CamFrame& cam, float wx, float wy, float wz, float& sx, f
 	if (!cam.hasLook) return false;
 	const float d[3] = { wx - cam.eyeX, wy - cam.eyeY, wz - cam.eyeZ };
 	const float z = Dot3(d, cam.forward);
-	if (z < 12.f) return false;
+	if (z < 8.f) return false;
 
 	const float x = Dot3(d, cam.right);
 	const float y = Dot3(d, cam.up);
@@ -199,14 +168,15 @@ bool ProjectAngular(const CamFrame& cam, float wx, float wy, float wz, float& sx
 	const float dy = wy - cam.eyeY;
 	const float dz = wz - cam.eyeZ;
 	const float distXY = std::sqrt(dx * dx + dy * dy);
-	if (distXY < 8.f && std::fabs(dz) < 8.f) return false;
+	if (distXY < 4.f && std::fabs(dz) < 4.f) return false;
 
 	const float yawTo = std::atan2(dx, dy);
+	// Match BasisFromPlayerRot: viewPitch = -rotX stored in cam.pitch already as view pitch
 	const float pitchTo = std::atan2(dz, (std::max)(distXY, 1.f));
 	const float dyaw = NormAngle(yawTo - cam.yaw);
 	const float dpitch = NormAngle(pitchTo - cam.pitch);
 
-	if (std::fabs(dyaw) > (105.f / kDeg)) return false;
+	if (std::fabs(dyaw) > (120.f / kDeg)) return false;
 
 	const float aspect = cam.sw / (cam.sh > 1.f ? cam.sh : 1.f);
 	const float halfFovY = cam.fovY * 0.5f;
@@ -232,52 +202,43 @@ void CaptureCameraForFrame(IDirect3DDevice9* device)
 	}
 	g_cam.sw = sw;
 	g_cam.sh = sh;
-	// DefaultWorldFOV-ish; slightly wide pulls sky-high boxes down toward objects.
-	g_cam.fovY = 75.f * kPi / 180.f;
+	g_cam.fovY = 82.f * kPi / 180.f;
 
 	float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
 	if (!ReadPlayerPose(&px, &py, &pz, &rx, &ry, &rz)) return;
 
 	g_cam.yaw = rz;
-	// FNV rotX: up is negative → view pitch = -rotX
-	g_cam.pitch = -rx;
+	g_cam.pitch = -rx; // view pitch: looking up = positive
 
+	// Eye: camera node translate only (position). Do NOT use node rotation — it was -80° garbage.
 	g_cam.eyeX = px;
 	g_cam.eyeY = py;
-	g_cam.eyeZ = pz + 110.f;
-
-	void* node = FindCameraNode();
-	bool gotNodeBasis = false;
-	if (node) {
+	g_cam.eyeZ = pz + 120.f;
+	if (void* node = FindCameraNode()) {
 		float cx, cy, cz;
 		if (ReadNodeTranslate(node, &cx, &cy, &cz)) {
 			g_cam.eyeX = cx;
 			g_cam.eyeY = cy;
 			g_cam.eyeZ = cz;
+			g_cam.source = 6;
+		} else {
+			g_cam.source = 5;
 		}
-		gotNodeBasis = BasisFromCameraNode(node, g_cam.forward, g_cam.right, g_cam.up);
+	} else {
+		g_cam.source = 5;
 	}
 
-	if (gotNodeBasis) {
-		g_cam.source = 7;
-		g_cam.hasLook = true;
-		// Keep yaw/pitch for angular fallback from look vector
-		g_cam.yaw = std::atan2(g_cam.forward[0], g_cam.forward[1]);
-		g_cam.pitch = std::atan2(g_cam.forward[2],
-			std::sqrt(g_cam.forward[0] * g_cam.forward[0] + g_cam.forward[1] * g_cam.forward[1]));
-	} else {
-		BasisFromYawPitch(g_cam.yaw, g_cam.pitch, g_cam.forward, g_cam.right, g_cam.up);
-		g_cam.source = 5;
-		g_cam.hasLook = true;
-	}
+	BasisFromPlayerRot(rz, rx, g_cam.forward, g_cam.right, g_cam.up);
+	g_cam.hasLook = true;
 	g_cam.valid = true;
 
 	static int cool = 0;
 	if ((cool++ % 300) == 0) {
 		float tsx = -1, tsy = -1;
-		const bool ok = ProjectLook(g_cam, px, py, pz + 40.f, tsx, tsy);
-		SFC_LOG("W2S src=%d look=%d xy=%.0f,%.0f pitch=%.1f fov=%.0f",
-			g_cam.source, ok ? 1 : 0, tsx, tsy, g_cam.pitch * kDeg, g_cam.fovY * kDeg);
+		const bool ok = ProjectLook(g_cam, px, py, pz + 40.f, tsx, tsy)
+			|| ProjectAngular(g_cam, px, py, pz + 40.f, tsx, tsy);
+		SFC_LOG("W2S src=%d ok=%d xy=%.0f,%.0f viewPitch=%.1f",
+			g_cam.source, ok ? 1 : 0, tsx, tsy, g_cam.pitch * kDeg);
 	}
 }
 
@@ -303,7 +264,6 @@ bool WorldBoxToScreenRect(
 {
 	if (!g_cam.valid) return false;
 
-	// Anchor on object center (not tall feet→head) — stops loot boxes floating into the sky.
 	const float midZ = cz + halfH;
 	ScreenPos mid = WorldToScreen(cx, cy, midZ);
 	if (!mid.ok) {
@@ -313,14 +273,14 @@ bool WorldBoxToScreenRect(
 
 	ScreenPos head = WorldToScreen(cx, cy, cz + halfH * 2.f);
 	ScreenPos feet = WorldToScreen(cx, cy, cz);
-	float h = 36.f;
+	float h = 40.f;
 	if (head.ok && feet.ok)
 		h = std::fabs(head.y - feet.y);
-	if (h < 14.f) h = 14.f;
-	if (h > 220.f) h = 220.f;
-	float w = h * (halfW > 1.f && halfH > 1.f ? (halfW / halfH) : 0.4f);
-	if (w < 10.f) w = 10.f;
-	if (w > 160.f) w = 160.f;
+	if (h < 16.f) h = 16.f;
+	if (h > 200.f) h = 200.f;
+	float w = h * (halfH > 1.f ? (halfW / halfH) : 0.4f);
+	if (w < 12.f) w = 12.f;
+	if (w > 140.f) w = 140.f;
 
 	outMinX = mid.x - w * 0.5f;
 	outMaxX = mid.x + w * 0.5f;
