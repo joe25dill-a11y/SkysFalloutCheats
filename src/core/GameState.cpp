@@ -744,14 +744,25 @@ void ReadWeapon(void* player, char* nameOut, size_t nameLen, int& clip, int& cli
 
 const char* NameForRef(void* refr)
 {
-	void* base = *reinterpret_cast<void**>(reinterpret_cast<char*>(refr) + kOff_BaseForm);
-	if (!base) return nullptr;
-	const auto t = FormTypeId(base);
-	if (t == kFormType_TESNPC || t == kFormType_TESCreature)
-		return ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ActorBaseFullName);
-	if (t == kFormType_TESObjectCONT || t == kFormType_TESObjectDOOR || t == kFormType_TESObjectWEAP)
-		return ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ContFullName);
-	return ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ContFullName);
+	__try {
+		if (!refr) return nullptr;
+		void* base = *reinterpret_cast<void**>(reinterpret_cast<char*>(refr) + kOff_BaseForm);
+		if (!base) return nullptr;
+		const auto t = FormTypeId(base);
+		const char* n = nullptr;
+		if (t == kFormType_TESNPC || t == kFormType_TESCreature)
+			n = ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ActorBaseFullName);
+		else
+			n = ReadFullNameComponent(reinterpret_cast<char*>(base) + kOff_ContFullName);
+		if (n && n[0] && !(n[0] == '?' && n[1] == '\0')) return n;
+		// Fallback: try TESFullName at 0x18 (some bound objects)
+		n = ReadFullNameComponent(reinterpret_cast<char*>(base) + 0x18);
+		if (n && n[0] && !(n[0] == '?' && n[1] == '\0')) return n;
+		return nullptr;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		return nullptr;
+	}
 }
 
 struct PodSnap {

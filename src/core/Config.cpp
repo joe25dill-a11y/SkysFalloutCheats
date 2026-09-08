@@ -113,6 +113,15 @@ void FromJson(const nlohmann::json& j, AppConfig& c)
 		c.performance.espMaxDistance = p.value("espMaxDistance", c.performance.espMaxDistance);
 		c.performance.eventDrivenPreferred = p.value("eventDrivenPreferred", c.performance.eventDrivenPreferred);
 		c.performance.espEnabled = p.value("espEnabled", c.performance.espEnabled);
+		// Clamp range: 100 ft .. 5000 ft (stored as game units).
+		constexpr float kMinU = 100.f * (128.f / 6.f);
+		constexpr float kMaxU = 5000.f * (128.f / 6.f);
+		if (c.performance.espMaxDistance < kMinU) c.performance.espMaxDistance = kMinU;
+		if (c.performance.espMaxDistance > kMaxU) c.performance.espMaxDistance = kMaxU;
+		if (c.performance.maxEspMarkers < 8) c.performance.maxEspMarkers = 8;
+		if (c.performance.maxEspMarkers > 512) c.performance.maxEspMarkers = 512;
+		if (c.performance.espScanMs < 50) c.performance.espScanMs = 50;
+		if (c.performance.espScanMs > 5000) c.performance.espScanMs = 5000;
 	}
 	if (j.contains("diagnostics")) {
 		auto& d = j["diagnostics"];

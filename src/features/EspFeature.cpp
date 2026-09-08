@@ -1,9 +1,12 @@
 #include "core/Feature.hpp"
 #include "core/Config.hpp"
+#include "core/ConsoleBridge.hpp"
+#include "core/CompanionFollow.hpp"
 #include "core/GameState.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
 #include "render/WorldToScreen.hpp"
+#include "ui/Notifications.hpp"
 #include "imgui.h"
 #include <algorithm>
 #include <cstdio>
@@ -194,19 +197,46 @@ public:
 
 		ImGui::SeparatorText("Nearby");
 		const auto& markers = GameState::Get().Snapshot().nearby;
-		ImGui::BeginChild("##esp_menu_list", ImVec2(0, 220), true);
+		ImGui::BeginChild("##esp_menu_list", ImVec2(0, 260), true);
 		if (markers.empty()) {
 			ImGui::TextDisabled("Empty — enable ESP or hit Scan now.");
 		} else {
 			int shown = 0;
 			for (const auto& m : markers) {
 				if (!KindWanted(m.kind, showNpcs_, showLoot_, showContainers_, showDoors_)) continue;
+				ImGui::PushID(static_cast<int>(m.refId ? m.refId : (shown + 1) * 17));
 				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ColorForKind(m.kind)),
 					"%-5s %4.0fft  %s", TagForKind(m.kind), DistFeet(m.distance), DisplayName(m));
+				if (m.refId != 0) {
+					if (ImGui::SmallButton("Go")) {
+						ConsoleBridge::Get().Runf("player.moveto %08X", m.refId);
+						Notify("Moving to target");
+					}
+					if (m.kind == 0) {
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Bring")) {
+							CompanionFollow::Get().BringRef(m.refId);
+							Notify("Bring sent");
+						}
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Heal")) {
+							ConsoleBridge::Get().Runf("\"%08X\".resethealth", m.refId);
+							Notify("Heal sent");
+						}
+					} else {
+						ImGui::SameLine();
+						if (ImGui::SmallButton("Pull")) {
+							ConsoleBridge::Get().Runf("%08X.moveto player", m.refId);
+							Notify("Pulled to you");
+						}
+					}
+				}
+				ImGui::PopID();
 				if (++shown >= 28) break;
 			}
 		}
 		ImGui::EndChild();
+		ImGui::TextDisabled("Go = you to them | Pull = loot/door to you | Bring/Heal = NPCs");
 	}
 
 	void DrawHud() override

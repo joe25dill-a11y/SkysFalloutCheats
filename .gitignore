@@ -1,5 +1,6 @@
 build/
 deps/
+tmp_esp_frames/
 *.user
 *.suo
 .vs/
@@ -12,3 +13,4 @@ build_*.txt
 crash_*.txt
 *.log
 .DS_Store
+tools/test-fnv-vortex.ps1
